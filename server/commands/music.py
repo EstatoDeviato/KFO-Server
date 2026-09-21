@@ -216,7 +216,7 @@ def ooc_cmd_radio(client, arg):
             f"No radio station with id {radio_id}. Use /radio to list the available radios."
         )
 
-    if not client.area.can_radio:
+    if not client.is_mod and client not in client.area.owners and not client.area.can_radio:
         raise ClientError("Radio stations are not allowed in this area.")
 
     # Reuse the standard music-change path so radios honor the same area music
