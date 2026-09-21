@@ -1773,6 +1773,8 @@ class Area:
                                 if not looping or s["name"] == self.music:
                                     continue
                                 songs = songs + [s]
+            if not songs:
+                return None
             song = random.choice(songs)
             return self.JukeboxVote(None, song["name"], song["length"], "Jukebox")
         elif len(self.jukebox_votes) == 1:
