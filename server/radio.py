@@ -1,12 +1,12 @@
 """Radio station configuration and lookup.
 
-KFO-Server owners can drop a ``config/radio.json`` file listing named radio
+KFO-Server owners can drop a ``config/radio.yaml`` file listing named radio
 stream URLs. Players can then use ``/radio`` to list them and ``/radio <id>``
 to play one anywhere, without the usual DJ/area music restrictions. The URLs
 are operator-controlled, so ``/radio`` acts as a safe shortcut to ``/play``.
 """
 
-import json
+import yaml
 import logging
 import os
 from dataclasses import dataclass
@@ -40,7 +40,7 @@ class RadioStation:
 class RadioManager:
     """Loads, validates and looks up the configured radio stations."""
 
-    DEFAULT_PATH = "config/radio.json"
+    DEFAULT_PATH = "config/radio.yaml"
 
     def __init__(self, path=DEFAULT_PATH):
         self.path = path
@@ -52,17 +52,17 @@ class RadioManager:
         return list(self._stations)
 
     def reload(self):
-        """(Re)load stations from the JSON file, clearing the list on failure."""
+        """(Re)load stations from the YAML file, clearing the list on failure."""
         stations = []
         if os.path.isfile(self.path):
             try:
                 with open(self.path, "r", encoding="utf-8") as handle:
-                    raw = json.load(handle)
+                    raw = yaml.safe_load(handle)
                 if not isinstance(raw, list):
-                    raise ValueError(f"{self.path} must contain a JSON array of radio objects.")
+                    raise ValueError(f"{self.path} must contain a YAML list of radio objects.")
                 for entry in raw:
                     stations.append(RadioStation(**entry))
-            except (OSError, ValueError) as exc:
+            except (OSError, ValueError, TypeError, yaml.YAMLError) as exc:
                 logger.debug("Cannot load radio stations from %s: %s", self.path, exc)
         self._stations = stations
 
