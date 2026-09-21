@@ -939,12 +939,14 @@ class ClientManager:
                         return
 
                 for area in target_areas:
+                    allowed = self.is_mod or self in area.owners
+
                     if area.cannot_ic_interact(self):
                         self.send_ooc(
                             f"You are not on area [{area.id}] {area.name} invite list, and thus, you cannot change music!"
                         )
                         continue
-                    if not self.is_mod and self not in area.owners and not area.can_dj:
+                    if not allowed and not area.can_dj:
                         self.send_ooc(
                             f"You cannot change music in area [{area.id}] {area.name}!"
                         )
@@ -955,7 +957,7 @@ class ClientManager:
                         )
                         continue
                     if self.edit_ambience:
-                        if self.is_mod or self in area.owners:
+                        if allowed:
                             area.set_ambience(name)
                             self.send_ooc(
                                 f"Setting area [{area.id}] {area.name} ambience to {name}."
@@ -964,7 +966,7 @@ class ClientManager:
                         else:
                             self.edit_ambinece = False
                     elif self.editing_minigame_song != "":
-                        if self.is_mod or self in area.owners:
+                        if allowed:
                             condition_str = ""
                             if self.editing_minigame_song_condition == 0:
                                 condition_str = "start"
@@ -1009,8 +1011,7 @@ class ClientManager:
                         if (
                             len(showname) > 0
                             and not area.showname_changes_allowed
-                            and not self.is_mod
-                            and self not in area.owners
+                            and not allowed
                         ):
                             self.send_ooc(
                                 f"Showname changes are forbidden in area [{area.id}] {area.name}!"
@@ -1021,7 +1022,7 @@ class ClientManager:
                     effects = int(effects)
 
                     # Jukebox check
-                    if area.jukebox and not self.is_mod and self not in area.owners:
+                    if area.jukebox and not allowed:
                         area.add_jukebox_vote(self, name, length, showname)
                         database.log_area(
                             "jukebox.vote", self, area, message=name)

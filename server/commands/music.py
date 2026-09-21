@@ -216,14 +216,15 @@ def ooc_cmd_radio(client, arg):
             f"No radio station with id {radio_id}. Use /radio to list the available radios."
         )
 
-    if not client.is_mod and client not in client.area.owners and not client.area.can_radio:
+    allowed = client.is_mod or client in client.area.owners
+    if not allowed and not client.area.can_radio:
         raise ClientError("Radio stations are not allowed in this area.")
 
     # Reuse the standard music-change path so radios honor the same area music
     # prefs as /play (blockdj, invite list, can_dj, music_locked, jukebox,
     # floodguard), and so a played radio still autoplays for new joiners when
     # the area's music_autoplay pref is enabled.
-    client.change_music(station.url, client.char_id, "", 2, True, trusted_url=True)
+    client.change_music(station.url, client.char_id, client.showname, 2, True, trusted_url=True)
 
 
 @mod_only()
