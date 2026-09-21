@@ -1,0 +1,8 @@
+# Radio stations playable via /radio.
+# Each entry needs a unique id, a display name, and a stream URL.
+- id: 1
+  name: TouHou Radio
+  url: https://stream.gensokyoradio.net/3
+- id: 2
+  name: Lofi Radio
+  url: https://listen.reyfm.de/lofi_320kbps.mp3

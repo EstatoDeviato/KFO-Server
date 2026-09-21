@@ -46,6 +46,7 @@ AREA_PREF_CM_ALLOWED = frozenset([
     "client_music",
     "can_dj",
     "music_locked",
+    "can_radio",
     "hidden",
     "can_whisper",
     "can_wtce",

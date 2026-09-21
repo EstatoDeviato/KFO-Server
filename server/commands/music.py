@@ -17,6 +17,7 @@ __all__ = [
     "ooc_cmd_jukebox",
     "ooc_cmd_play",
     "ooc_cmd_play_once",
+    "ooc_cmd_radio",
     "ooc_cmd_blockdj",
     "ooc_cmd_unblockdj",
     "ooc_cmd_musiclists",
@@ -191,6 +192,39 @@ def ooc_cmd_play_once(client, arg):
     """
     client.change_music(arg, client.char_id, "", 2,
                         False)  # non-looped change music
+
+
+@command(Arg("arg", rest=True, default="", help="radio id (blank lists all radios)"))
+def ooc_cmd_radio(client, arg):
+    """
+    List configured radio stations, or play one by its id.
+    Usage: /radio [id]
+    """
+    manager = client.server.radio_manager
+    if arg.strip() == "":
+        client.send_ooc(f"Configured radio stations:\n{manager.list_text()}")
+        return
+
+    try:
+        radio_id = int(arg.strip())
+    except ValueError:
+        raise ArgumentError("Radio id must be a number. Use /radio to list the available radios.")
+
+    station = manager.find(radio_id)
+    if station is None:
+        raise ArgumentError(
+            f"No radio station with id {radio_id}. Use /radio to list the available radios."
+        )
+
+    allowed = client.is_mod or client in client.area.owners
+    if not allowed and not client.area.can_radio:
+        raise ClientError("Radio stations are not allowed in this area.")
+
+    # Reuse the standard music-change path so radios honor the same area music
+    # prefs as /play (blockdj, invite list, can_dj, music_locked, jukebox,
+    # floodguard), and so a played radio still autoplays for new joiners when
+    # the area's music_autoplay pref is enabled.
+    client.change_music(station.url, client.char_id, client.showname, 2, True, trusted_url=True)
 
 
 @mod_only()

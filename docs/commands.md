@@ -616,6 +616,10 @@
 * **play\_once** `<name>`
     - Play a track without looping it. See `/play` for this command with looping.
     - Can be used with streamed songs from a valid direct-link in place of `name`, if you're a CM or higher.
+* **radio** `[id]`
+    - List the configured radio stations, or play one by its id (`/radio <id>`).
+    - Stations are configured by the server owner in `config/radio.yaml`.
+    - Requires the `can_radio` area pref to be enabled (off by default) and respects the area's music prefs (`can_dj`, `music_locked`, etc.).
 * **blockdj** `<id>` *(Mod)*
     - Prevent a user from changing music.
 * **unblockdj** `<id>` *(Mod)*

@@ -66,6 +66,7 @@ class Area:
         self.ambience = ""
         self.can_dj = True
         self.music_locked = False
+        self.can_radio = False
         self.hidden = False
         self.can_whisper = True
         self.can_wtce = True
@@ -488,6 +489,8 @@ class Area:
             self.can_dj = area["can_dj"]
         if "music_locked" in area:
             self.music_locked = area["music_locked"]
+        if "can_radio" in area:
+            self.can_radio = area["can_radio"]
         if "hidden" in area:
             self.hidden = area["hidden"]
         if "can_whisper" in area:
@@ -637,6 +640,7 @@ class Area:
         area["ambience"] = self.ambience
         area["can_dj"] = self.can_dj
         area["music_locked"] = self.music_locked
+        area["can_radio"] = self.can_radio
         area["hidden"] = self.hidden
         area["can_whisper"] = self.can_whisper
         area["can_wtce"] = self.can_wtce
