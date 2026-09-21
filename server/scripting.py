@@ -269,6 +269,7 @@ _AREA_FIELDS = {
     "can_dj": lambda a: int(a.can_dj),
     "jukebox": lambda a: int(a.jukebox),
     "music_locked": lambda a: int(a.music_locked),
+    "can_radio": lambda a: int(a.can_radio),
     # Minigames
     "can_battle": lambda a: int(a.can_battle),
     "auto_pair": lambda a: int(a.auto_pair),

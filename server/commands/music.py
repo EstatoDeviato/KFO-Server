@@ -216,18 +216,14 @@ def ooc_cmd_radio(client, arg):
             f"No radio station with id {radio_id}. Use /radio to list the available radios."
         )
 
-    # Reuse the existing music-change floodguard so a single player can't spam.
-    cooldown = client.change_music_cd()
-    if cooldown:
-        client.send_ooc(
-            f"You changed song too many times. Please try again after {int(cooldown)} seconds."
-        )
-        return
+    if not client.area.can_radio:
+        raise ClientError("Radio stations are not allowed in this area.")
 
-    client.area.play_music(station.url, client.char_id, 1, "", 0)
-    client.area.add_music_playing(client, station.url)
-    database.log_area("radio", client, client.area, message=f"{station.name} ({station.url})")
-    client.send_ooc(f"Now playing '{station.name}' (radio {station.id}).")
+    # Reuse the standard music-change path so radios honor the same area music
+    # prefs as /play (blockdj, invite list, can_dj, music_locked, jukebox,
+    # floodguard), and so a played radio still autoplays for new joiners when
+    # the area's music_autoplay pref is enabled.
+    client.change_music(station.url, client.char_id, "", 2, True, trusted_url=True)
 
 
 @mod_only()

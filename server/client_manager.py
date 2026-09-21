@@ -872,7 +872,7 @@ class ClientManager:
             self.mus_change_time[self.mus_counter] = time.time()
             return 0
 
-        def change_music(self, song, cid, showname="", effects=0, loop=True):
+        def change_music(self, song, cid, showname="", effects=0, loop=True, trusted_url=False):
             if self.is_muted:  # Checks to see if the client has been muted by a mod
                 self.send_ooc("You are muted by a moderator.")
                 return
@@ -888,7 +888,9 @@ class ClientManager:
                 .replace("<dollar>", "$") \
                 .replace("<and>", "&")
             try:
-                if song == "~stop.mp3" or song.strip() == "" or self.server.get_song_is_category(
+                if trusted_url:
+                    name, length = song, -1
+                elif song == "~stop.mp3" or song.strip() == "" or self.server.get_song_is_category(
                     self.construct_music_list(), song
                 ):
                     name, length = "~stop.mp3", 0
@@ -906,7 +908,7 @@ class ClientManager:
                 if not loop:
                     length = 0
 
-                if (contains_URL(song)):
+                if (contains_URL(song) and not trusted_url):
                     checked = False
                     # Only if url music is configured to be allowed
                     if self.server.config["music_allow_url"] == True:
