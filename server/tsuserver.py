@@ -104,7 +104,7 @@ class TsuServer3:
             self.load_iniswaps()
             self.load_characters()
             self.load_music()
-            self.radio_manager.reload()
+            self.load_radio()
             self.load_backgrounds()
             self.load_server_links()
             self.load_ipranges()
@@ -452,6 +452,9 @@ class TsuServer3:
     def load_music(self):
         self.load_music_list()
 
+    def load_radio(self):
+        self.radio_manager.reload()
+
     def load_backgrounds(self):
         """Load the backgrounds list from a YAML file."""
         with open("config/backgrounds.yaml", "r", encoding="utf-8") as bgs:
@@ -678,6 +681,7 @@ class TsuServer3:
          - Censors
          - Characters
          - Music
+         - Radio
          - Backgrounds
          - Commands
          - Banlists
@@ -718,7 +722,7 @@ class TsuServer3:
         self.load_iniswaps()
         self.load_characters()
         self.load_music()
-        self.radio_manager.reload()
+        self.load_radio()
         self.load_backgrounds()
 
         # TODO: Only do the refresh if the server link list has changed
