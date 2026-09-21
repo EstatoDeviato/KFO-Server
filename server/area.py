@@ -66,7 +66,7 @@ class Area:
         self.ambience = ""
         self.can_dj = True
         self.music_locked = False
-        self.can_radio = False
+        self.can_radio = True
         self.hidden = False
         self.can_whisper = True
         self.can_wtce = True
