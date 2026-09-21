@@ -26,6 +26,7 @@ from server.network.webhooks import Webhooks
 from server.web_view.gm_panel import GMPanelApp
 from server.constants import remove_URL, dezalgo
 from server.medieval_parser import MedievalParser
+from server.radio import RadioManager
 
 
 logger = logging.getLogger("main")
@@ -47,6 +48,7 @@ class TsuServer3:
         self.char_emotes = None
         self.music_list = []
         self.music_whitelist = []
+        self.radio_manager = RadioManager()
         self.backgrounds = None
         self.backgrounds_categories = None
         self.server_links = None
@@ -102,6 +104,7 @@ class TsuServer3:
             self.load_iniswaps()
             self.load_characters()
             self.load_music()
+            self.radio_manager.reload()
             self.load_backgrounds()
             self.load_server_links()
             self.load_ipranges()
@@ -715,6 +718,7 @@ class TsuServer3:
         self.load_iniswaps()
         self.load_characters()
         self.load_music()
+        self.radio_manager.reload()
         self.load_backgrounds()
 
         # TODO: Only do the refresh if the server link list has changed

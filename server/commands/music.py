@@ -17,6 +17,7 @@ __all__ = [
     "ooc_cmd_jukebox",
     "ooc_cmd_play",
     "ooc_cmd_play_once",
+    "ooc_cmd_radio",
     "ooc_cmd_blockdj",
     "ooc_cmd_unblockdj",
     "ooc_cmd_musiclists",
@@ -191,6 +192,42 @@ def ooc_cmd_play_once(client, arg):
     """
     client.change_music(arg, client.char_id, "", 2,
                         False)  # non-looped change music
+
+
+@command(Arg("arg", rest=True, default="", help="radio id (blank lists all radios)"))
+def ooc_cmd_radio(client, arg):
+    """
+    List configured radio stations, or play one by its id.
+    Usage: /radio [id]
+    """
+    manager = client.server.radio_manager
+    if arg.strip() == "":
+        client.send_ooc(f"Configured radio stations:\n{manager.list_text()}")
+        return
+
+    try:
+        radio_id = int(arg.strip())
+    except ValueError:
+        raise ArgumentError("Radio id must be a number. Use /radio to list the available radios.")
+
+    station = manager.find(radio_id)
+    if station is None:
+        raise ArgumentError(
+            f"No radio station with id {radio_id}. Use /radio to list the available radios."
+        )
+
+    # Reuse the existing music-change floodguard so a single player can't spam.
+    cooldown = client.change_music_cd()
+    if cooldown:
+        client.send_ooc(
+            f"You changed song too many times. Please try again after {int(cooldown)} seconds."
+        )
+        return
+
+    client.area.play_music(station.url, client.char_id, 1, "", 0)
+    client.area.add_music_playing(client, station.url)
+    database.log_area("radio", client, client.area, message=f"{station.name} ({station.url})")
+    client.send_ooc(f"Now playing '{station.name}' (radio {station.id}).")
 
 
 @mod_only()

@@ -1,0 +1,12 @@
+[
+    {
+        "id": 1,
+        "name": "TouHou Radio",
+        "url": "https://stream.gensokyoradio.net/3"
+    },
+    {
+        "id": 2,
+        "name": "Lofi Radio",
+        "url": "https://listen.reyfm.de/lofi_320kbps.mp3"
+    }
+]
