@@ -125,6 +125,17 @@ STEAL_EFFECTS = {
 
 STAT_NAMES = ("hp", "mana", "atk", "defe", "spa", "spd", "spe")
 
+# Command-facing stat names -> YAML keys used by fighter definitions.
+STAT_STORAGE_KEYS = {
+    "hp": "HP",
+    "mana": "MANA",
+    "atk": "ATK",
+    "defe": "DEF",
+    "spa": "SPA",
+    "spd": "SPD",
+    "spe": "SPE",
+}
+
 BATTLE_CONFIG_FLOATS = {
     "critical_bonus": "battle_critical_bonus",
     "bonus_malus": "battle_bonus_malus",
@@ -555,7 +566,7 @@ def ooc_cmd_modify_stat(client, name, stat, value):
         return
 
     char = _load_fighter(fighter_name)
-    char[stat.upper()] = value
+    char[STAT_STORAGE_KEYS[stat]] = value
     _save_fighter(fighter_name, char)
 
     client.send_ooc(
@@ -785,13 +796,13 @@ def ooc_cmd_fight(client):
             return
 
         if fighter_by_name:
-            fighter_name, target = random.choice(list(fighter_by_name.items()))
-
             if client.battle is not None and client.battle.fighter in fighter_by_name:
-                client.battle = fighter_by_name[client.battle.fighter].battle
+                # Reconnect to the exact fighter slot already associated with this client.
+                target = fighter_by_name[client.battle.fighter]
             else:
-                client.battle = target.battle
+                _, target = random.choice(list(fighter_by_name.items()))
 
+            client.battle = target.battle
             client.battle.current_client = client
 
             if client.battle.guild is not None:
@@ -1214,7 +1225,7 @@ def _resolve_move(client, move_arg):
         return move_id, moves[move_id]
 
     normalized_name = move_arg.lower()
-    move_names = [current_move.name for current_move in moves]
+    move_names = [current_move.name.lower() for current_move in moves]
 
     if normalized_name not in move_names:
         client.send_ooc("There is no move with this name!")
