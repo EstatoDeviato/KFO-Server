@@ -672,7 +672,7 @@ class GMSessionManager:
         self._sessions = {}
         self._pending_tokens = {}
         self._pending_hub_auths = {}
-        self._session_ttl = int(config.get("session_ttl_seconds", 28800))
+        self._session_ttl = int(config.get("session_ttl_seconds", 600))
         self._login_token_ttl = int(config.get("login_token_ttl_seconds", 60))
         self._hub_auth_ttl = int(config.get("login_hub_ttl_seconds", 300))
         self._sweep_handle = None
