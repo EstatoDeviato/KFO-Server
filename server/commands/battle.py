@@ -739,18 +739,27 @@ def ooc_cmd_create_move(client, name, cost, type, power, accuracy, effects):
     Arg("name", help="item name"),
     Arg("effect", choices=ITEM_EFFECTS, help="item effect"),
     Arg("value", float, default=None, help="heal/mana amount or stat multiplier"),
+    Arg(
+        "evidence_name",
+        rest=True,
+        default="",
+        help="evidence shown in the IC message when the item is used",
+    ),
 )
-def ooc_cmd_create_item(client, name, effect, value):
+def ooc_cmd_create_item(client, name, effect, value, evidence_name):
     """
     Create an item YAML definition.
 
     Value is required for heals, mana restoration and stat changes.  It is
-    ignored for all other effects.
+    ignored for all other effects.  evidence_name is optional; when set, it
+    is attached as the evidence shown on the IC message sent when the item
+    is used.
 
-    Usage: /create_item ItemName Effect [Value]
+    Usage: /create_item ItemName Effect [Value] [EvidenceName]
     """
     item_name = derelative(name.strip().lower())
     normalized_effect = effect.strip().lower()
+    evidence_name = evidence_name.strip()
 
     if not item_name:
         client.send_ooc("Item name cannot be empty.")
@@ -782,6 +791,9 @@ def ooc_cmd_create_item(client, name, effect, value):
 
     if normalized_effect in ITEM_VALUE_EFFECTS:
         item["Value"] = value
+
+    if evidence_name:
+        item["EvidenceName"] = evidence_name
 
     _save_item(item_name, item)
     client.send_ooc(f"{item_name} has been created!")
@@ -1740,13 +1752,14 @@ def ooc_cmd_use_move(client, move, target):
 # Battle presentation
 # ---------------------------------------------------------------------------
 
-def battle_send_ic(client, msg, effect="", shake=0, offset=0):
+def battle_send_ic(client, msg, effect="", shake=0, offset=0, evidence=""):
     """
     Send a battle event to the current IC scene.
 
     ``effect`` is the visual battle effect name.
     ``shake`` enables a screenshake.
     ``offset`` selects the alive/dead sprite offset.
+    ``evidence`` is the evidence name to show alongside the message (e.g. when using an item).
     """
     offset = 100 if offset else client.offset_pair
 
@@ -1754,6 +1767,14 @@ def battle_send_ic(client, msg, effect="", shake=0, offset=0):
         sfx = f"sfx-{effect}"
     else:
         sfx = ""
+
+    if evidence != "":
+        client.area.evi_list.add_evidence(
+            client, "", "", f"{evidence}.png", client.pos
+        )
+        evidence_id = [len(client.area.evi_list)]
+    else:
+        evidence_id = [0]
 
     other_offset = 0
     other_emote = ""
@@ -1789,7 +1810,13 @@ def battle_send_ic(client, msg, effect="", shake=0, offset=0):
         other_folder=other_folder,
         screenshake=shake,
         effect=f"{effect}|BattleEffects|{sfx}",
+        evidence=evidence_id,
     )
+
+    if evidence != "":
+        client.area.evi_list.del_evidence(
+            client, evidence_id
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -2154,6 +2181,7 @@ def _process_item_action(client, area):
         return
 
     action = _item_action(item)
+    evidence_name = str(item.get("EvidenceName", "")).strip()
 
     # The item was selected before the turn resolved.  Consume it only now,
     # after stun/confusion/sleep/paralysis checks have passed.
@@ -2171,6 +2199,7 @@ def _process_item_action(client, area):
         battle_send_ic(
             client,
             msg=f"~{client.battle.fighter}~ uses ~{item.get('Name', item_name)}~",
+            evidence=evidence_name,
         )
 
     if is_ally_action:
@@ -2225,6 +2254,7 @@ def _process_item_action(client, area):
         battle_send_ic(
             client,
             msg=f"~{client.battle.fighter}~ uses ~{item.get('Name', item_name)}~ but it has no direct effect",
+            evidence=evidence_name,
         )
 
 
