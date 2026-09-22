@@ -77,15 +77,36 @@ class HubManager:
                 self.hubs.append(AreaManager(self, f"Hub {len(self.hubs)}"))
             while len(self.hubs) > len(hubs):
                 # Clean up excess hubs
-                h = self.hubs.pop()
-                clients = h.clients.copy()
-                for client in clients:
-                    client.set_area(self.default_hub().default_area())
+                self._clean_up_clients(self.hubs.pop())
 
             self.hubs[i].load(hub)
             self.hubs[i].o_name = self.hubs[i].name
             self.hubs[i].o_abbreviation = self.hubs[i].abbreviation
             i += 1
+
+    def _clean_up_clients(self, h):
+        """
+        Handle the clients of the hub that's in the middle of being cleared
+        gracfully.
+
+        Real clients are moved to the default hub. Automation executors
+        ([SCRIPT] clients) can never leave their hub -- `Client.set_area`
+        raises for them -- so trying to move them here would abort the reload
+        and strand them (still registered in `client_manager.clients`) inside
+        a hub that no longer exists. Detach them the same way
+        `AreaManager.remove_area` does: drop owner memberships and unregister
+        them from their area and the server's client list.
+        """
+        clients = h.clients.copy()
+        for client in clients:
+            if getattr(client, "is_automation", False):
+                h.owners.discard(client)
+                for area in h.areas:
+                    area._owners.discard(client)
+                client.leave_area()
+                client.clear()
+            else:
+                client.set_area(self.default_hub().default_area())
 
     def save(self, path="config/areas.yaml"):
         try:
