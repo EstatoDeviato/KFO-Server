@@ -1,4 +1,5 @@
 import random
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,6 +20,7 @@ __all__ = [
     "ooc_cmd_give_item",
     "ooc_cmd_remove_item",
     "ooc_cmd_empty_bag",
+    "ooc_cmd_bag",
     "ooc_cmd_modify_stat",
     "ooc_cmd_delete_fighter",
     "ooc_cmd_delete_move",
@@ -397,6 +399,34 @@ def _finish_turn_if_ready(area):
         area.battle_started = False
 
 
+def _format_bag_lines(client, title="🎒 Items 🎒"):
+    """Return formatted item-bag lines for a client."""
+    bag = getattr(client.battle, "bag", []) if client.battle is not None else []
+    counts = Counter(bag)
+
+    lines = [title]
+    if not counts:
+        lines.append("- Empty")
+        return lines
+
+    for item_name in sorted(counts):
+        lines.append(f"- {item_name} x{counts[item_name]}")
+    return lines
+
+
+def _send_bag_message(viewer, target):
+    """Send the target player's bag to the viewer."""
+    if target.battle is None:
+        viewer.send_ooc("Target has to choose a fighter first!")
+        return
+
+    lines = [
+        f"\n🎒 [{target.id}]{target.showname}'s Battle Bag 🎒:",
+        *(_format_bag_lines(target, title="Items:")),
+    ]
+    viewer.send_ooc("\n".join(lines))
+
+
 def _send_fighter_message(client, include_moves=False):
     """Build and send a fighter information message."""
     battle = client.battle
@@ -439,6 +469,10 @@ def _send_fighter_message(client, include_moves=False):
                 lines.extend(f"- {effect}" for effect in move.effect)
 
             lines.append("")
+
+    if include_moves:
+        lines.extend(_format_bag_lines(client))
+        lines.append("")
 
     client.send_ooc("\n".join(lines))
 
@@ -845,6 +879,39 @@ def ooc_cmd_empty_bag(client, target_id):
 
     client.send_ooc(f"Emptied [{target.id}]{target.showname}'s bag ({removed} items).")
     target.send_ooc("Your item bag has been emptied.")
+
+
+@command(Arg("target_id", int, default=None, help="target client ID"))
+def ooc_cmd_bag(client, target_id):
+    """Show the caller's item bag, or another player's bag for a GM."""
+    area = client.area
+    target = client
+
+    if target_id is not None:
+        # The uploaded battle module exposes area owners as the in-module
+        # authorization check for administrative player inspection.
+        if client not in getattr(area.area_manager, "owners", ()):
+            client.send_ooc("Only a GM can inspect another player's bag.")
+            return
+
+        target = _get_area_client_ids(area).get(target_id)
+        if target is None:
+            client.send_ooc("Target not found!")
+            return
+
+    if target.battle is None:
+        if target is client:
+            client.send_ooc("You have to choose a fighter first!")
+        else:
+            client.send_ooc("Target has to choose a fighter first!")
+        return
+
+    if target is client:
+        lines = ["\n🎒 Your Battle Bag 🎒:", *_format_bag_lines(client, title="Items:")]
+        client.send_ooc("\n".join(lines))
+        return
+
+    _send_bag_message(client, target)
 
 
 @command(
