@@ -2992,10 +2992,12 @@ class ClientManager:
             self.spe = float(fighter["SPE"])
             self.target = None
             self.selected_move = -1
+            self.selected_item = -1
             self.status = None
             self.current_client = client
             self.guild = None
             self.moves = [ClientManager.Move(move) for move in fighter["Moves"]]
+            self.bag = fighter["bag"]
 
     class Move:
         def __init__(self, move):
