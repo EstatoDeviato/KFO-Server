@@ -61,9 +61,9 @@ def ooc_cmd_help(client, topic):
         You may also use /help <category> to see available commands for that category.
 
         If you don't understand a specific core feature, check the official
-        repository for more information:
+        server codebase wiki for more information:
 
-        https://github.com/Crystalwarrior/KFO-Server/blob/master/README.md 
+        https://killing-fever-online.github.io/KFO-Server/
 
         Available Categories:
         """

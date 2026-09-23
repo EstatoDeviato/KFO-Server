@@ -1,6 +1,6 @@
 # KFO Server Documentation
 
-This site explains [KFO Server](https://github.com/Crystalwarrior/KFO-Server),
+This site explains [KFO Server](https://github.com/Killing-Fever-Online/KFO-Server),
 the server software behind [Killing Fever Online](https://killingfeveronline.com/).
 These pages are made from the server's own files, so they always match the
 server as it actually works. (If you are looking for the Community Wiki

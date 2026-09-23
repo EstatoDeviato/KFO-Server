@@ -18,7 +18,7 @@ In order to set up the server, you must follow these instructions. This assumes 
 We recommend [Git](https://git-scm.com/downloads/guis) for downloading the server software.
 This makes it easier to update the server later. In order to use Git, just clone the respository.
 
-If you don't want to use Git, you can download the latest zip of KFO-Server [here](https://github.com/Crystalwarrior/KFO-Server/archive/refs/heads/master.zip). Extract it and put it wherever you want.
+If you don't want to use Git, you can download the latest zip of KFO-Server [here](https://github.com/Killing-Fever-Online/KFO-Server/archive/refs/heads/master.zip). Extract it and put it wherever you want.
 
 ### Install dependencies
 
@@ -84,7 +84,7 @@ That's it - you can read the site just like it would appear online. The rest is 
 ## Pro Tips
 
 * To keep the server running even if your login shell is closed, use a multiplexer, such as screen or tmux.
-* For more info about available command, see [Commands](https://crystalwarrior.github.io/kfo-server/auto/commands/). You may also use the /help command on the server.
+* For more info about available command, see [Commands](https://killing-fever-online.github.io/KFO-Server/auto/commands/). You may also use the /help command on the server.
 * For more info about Python virtual environments, refer to ["Creating Virtual Environments"](https://docs.python.org/3/library/venv.html#creating-virtual-environments)
 * In order to join your server, it has to be accessible to the public internet. You might need to forward the ports in config.yaml to make this work.
 * If you can't portforward, you may want to check out [ngrok](https://ngrok.com/). It's a service that allows you to expose your local server to the internet. It's free, but you can also pay for a subscription to get more features.

@@ -1,12 +1,9 @@
 site_name: KFO Server Docs
 site_description: Documentation for the official Killing Fever Online server codebase.
-site_url: https://crystalwarrior.github.io/kfo-server/
-repo_url: https://github.com/Crystalwarrior/KFO-Server
-repo_name: Crystalwarrior/KFO-Server
-# Docs contributions happen through GitHub (no prose.io). edit_uri drives the
-# edit/view/new action buttons rendered by overrides/partials/actions.html;
-# generated pages under docs/auto/ are excluded from those buttons.
-edit_uri: https://github.com/Crystalwarrior/KFO-Server/edit/master/docs/
+site_url: https://killing-fever-online.github.io/kfo-server/
+repo_url: https://github.com/Killing-Fever-Online/KFO-Server
+repo_name: Killing-Fever-Online/KFO-Server
+edit_uri: https://github.com/Killing-Fever-Online/KFO-Server/edit/master/docs/
 
 theme:
   name: material
