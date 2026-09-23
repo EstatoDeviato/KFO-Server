@@ -23,7 +23,9 @@
   }
 
   onReady(function () {
-    var tocRoot = document.querySelector('.md-nav[data-md-component="toc"]');
+    var tocRoot = document.querySelector(
+      '[data-md-component="toc"]'
+    );
     if (!tocRoot || !("IntersectionObserver" in window)) {
       return;
     }
