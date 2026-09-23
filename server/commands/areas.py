@@ -1,6 +1,7 @@
 from server import database
 from server.constants import TargetType
 from server.exceptions import ClientError, ArgumentError, AreaError
+from server.remote_client import RemoteClient
 
 from . import mod_only, command, Arg
 
@@ -517,6 +518,9 @@ def ooc_cmd_area_kick(client, target, destination, target_pos):
             targets = client.server.client_manager.get_targets(
                 client, TargetType.OOC_NAME, target
             )
+
+    # Exclude remote clients from the target list (gmpanel, automation)
+    targets = [c for c in targets if not isinstance(c, RemoteClient)]
 
     if len(targets) == 0:
         client.send_ooc(
