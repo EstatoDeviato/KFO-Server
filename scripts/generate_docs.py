@@ -208,10 +208,10 @@ def validate(catalog, area_prefs, hub_prefs):
 
 
 def _usage_line(command):
-    usage = command["usage"].strip()
+    usage = command["usage"].strip().removeprefix("Usage:")
     if not usage:
         args = _fallback_usage_args(command)
-        usage = f"Usage: /{command['name']}" + (f" {args}" if args else "")
+        usage = f"/{command['name']}" + (f" {args}" if args else "")
     return re.sub(r"\s+", " ", usage).strip()
 
 
@@ -237,7 +237,7 @@ def _doc_body(doc, command):
             continue
         if line.lower().startswith("usage:"):
             continue
-        lines.append("    " + line)
+        lines.append(" " + line)
     for arg in command["args"]:
         if not arg["help"]:
             continue
@@ -245,7 +245,7 @@ def _doc_body(doc, command):
         extra = ""
         if not arg["required"] and arg["default"] not in (None, ""):
             extra = f", default {arg['default']}"
-        lines.append(f"    - Argument `{arg['name']}` ({role}{extra}): {arg['help']}")
+        lines.append(f" - Argument `{arg['name']}` ({role}{extra}): {arg['help']}")
     return lines
 
 
@@ -263,20 +263,20 @@ def _tier_explain():
 
 def _command_block(command, aliases_by_command):
     usage = _usage_line(command)
-    out = [f"* **{command['name']}** `{usage}`{_tier(command)}"]
+    out = [f"### **/{command['name']}** {_tier(command)}\n> Usage: `{usage}`\n"]
     out.extend(_doc_body(command["docs"], command))
     aliases = aliases_by_command.get(command["name"])
     if aliases:
-        out.append("    - Aliases: " + ", ".join(f"`{a}`" for a in aliases))
+        out.append(" - Aliases: " + ", ".join(f"`{a}`" for a in aliases))
     return out
 
 
 def _pref_block(name, default, meta):
-    out = [f"* **{name}** *(default: {default})*"]
-    out.append(f"    - {meta['description']}")
+    out = [f"### **{name}** \n> (default: `{default}`)\n"]
+    out.append(meta['description'])
     note = meta.get("note")
     if note:
-        out.append(f"    - *{note}*")
+        out.append(f" - *{note}*")
     return out
 
 
