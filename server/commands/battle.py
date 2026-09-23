@@ -373,7 +373,7 @@ def ooc_cmd_choose_fighter(client, arg):
     """
     Choose a fighter from the server list.
 
-    Usage: /choose_fighter NameFighter
+    Usage: /choose_fighter <NameFighter>
     """
     fighter_name = derelative(arg.strip().lower())
 
@@ -389,7 +389,11 @@ def ooc_cmd_choose_fighter(client, arg):
 
 @command()
 def ooc_cmd_info_fighter(client):
-    """Send information about the currently selected fighter."""
+    """
+    Send information about the currently selected fighter.
+    
+    Usage: /info_fighter
+    """
     if _battle_fighter_exists(client):
         send_info_fighter(client)
     else:
@@ -552,7 +556,11 @@ def ooc_cmd_create_move(client, name, cost, type, power, accuracy, effects):
     Arg("value", float),
 )
 def ooc_cmd_modify_stat(client, name, stat, value):
-    """Modify one of a fighter's base stats."""
+    """
+    Modify one of a fighter's base stats.
+    
+    Usage: /modify_stat <FighterName> <hp|mana|atk|defe|spa|spd|spe> <Value>
+    """
     fighter_name = derelative(name.strip().lower())
 
     if not _fighter_exists(fighter_name):
@@ -578,7 +586,11 @@ def ooc_cmd_modify_stat(client, name, stat, value):
 @mod_only(hub_owners=True)
 @command(Arg("arg", rest=True, default="", help="fighter name"))
 def ooc_cmd_delete_fighter(client, arg):
-    """Delete a fighter YAML definition."""
+    """
+    Delete a fighter YAML definition.
+    
+    Usage: /delete_fighter <FighterName>
+    """
     fighter_name = derelative(arg.strip().lower())
     path = FIGHTER_STORAGE / f"{fighter_name}.yaml"
 
@@ -592,7 +604,11 @@ def ooc_cmd_delete_fighter(client, arg):
 @mod_only(hub_owners=True)
 @command(Arg("arg", rest=True, default="", help="move name"))
 def ooc_cmd_delete_move(client, arg):
-    """Delete a move from the currently selected fighter."""
+    """
+    Delete a move from the currently selected fighter.
+    
+    Usage: /delete_move <MoveName>
+    """
     if not _battle_fighter_exists(client):
         client.send_ooc("You have to choose the fighter first.")
         return
@@ -765,7 +781,11 @@ def send_battle_info(client):
 
 @command()
 def ooc_cmd_battle_info(client):
-    """Send information about the current battle."""
+    """
+    Send information about the current battle.
+
+    Usage: /battle_info
+    """
     if client in client.area.fighters:
         client.send_ooc(send_battle_info(client))
     else:
@@ -855,7 +875,11 @@ def ooc_cmd_fight(client):
 @mod_only(hub_owners=True)
 @command()
 def ooc_cmd_refresh_battle(client):
-    """Reset the current battle and return to the lobby."""
+    """
+    Reset the current battle and return to the lobby.
+    
+    Usage: /refresh_battle
+    """
     area = client.area
 
     # Restore every fighter from YAML so temporary battle changes such as
@@ -875,7 +899,11 @@ def ooc_cmd_refresh_battle(client):
 
 @command()
 def ooc_cmd_surrender(client):
-    """Surrender from the current battle."""
+    """
+    Surrender from the current battle.
+    
+    Usage: /surrender
+    """
     area = client.area
 
     if client not in area.fighters:
@@ -904,7 +932,11 @@ def ooc_cmd_surrender(client):
 @mod_only(hub_owners=True)
 @command(Arg("id", int, help="target client ID"))
 def ooc_cmd_remove_fighter(client, id):
-    """Force a fighter to leave the battle."""
+    """
+    Force a fighter to leave the battle.
+    
+    Usage: /remove_fighter <Target_ID>
+    """
     area = client.area
     fighter_ids = _get_fighter_ids(area)
 
@@ -939,7 +971,11 @@ def ooc_cmd_remove_fighter(client, id):
 @mod_only(hub_owners=True)
 @command(Arg("id", int, help="target client ID"))
 def ooc_cmd_force_skip_move(client, id):
-    """Force a fighter to skip the current turn."""
+    """
+    Force a fighter to skip the current turn.
+    
+    Usage: /force_skip_move <Target_ID>
+    """
     area = client.area
     fighter_ids = _get_fighter_ids(area)
 
@@ -963,7 +999,11 @@ def ooc_cmd_force_skip_move(client, id):
 
 @command()
 def ooc_cmd_skip_move(client):
-    """Skip the current turn."""
+    """
+    Skip the current turn.
+    
+    Usage: /skip_move
+    """
     area = client.area
 
     if client not in area.fighters:
@@ -1025,7 +1065,11 @@ def ooc_cmd_close_guild(client, arg):
 
 @command()
 def ooc_cmd_battle_effects(client):
-    """Show all available battle effects."""
+    """
+    Show all available battle effects.
+
+    Usage: /battle_effects
+    """
     lines = ["Available Battle Effects:"]
     lines.extend(f"- {effect}" for effect in BATTLE_EFFECTS)
     client.send_ooc("\n".join(lines))
@@ -1095,7 +1139,11 @@ def ooc_cmd_leave_guild(client, id):
 
 @command(Arg("id", int, help="target client ID"))
 def ooc_cmd_join_guild(client, id):
-    """Invite another fighter to the guild you lead."""
+    """
+    Invite another fighter to the guild you lead.
+    
+    Usage: /join_guild <Target_ID>
+    """
     area = client.area
 
     if client.battle is None:
@@ -1142,7 +1190,11 @@ def ooc_cmd_join_guild(client, id):
 
 @command(Arg("arg", rest=True, default="", help="guild name"))
 def ooc_cmd_create_guild(client, arg):
-    """Create a guild and become its leader."""
+    """
+    Create a guild and become its leader.
+
+    Usage: /create_guild <GuildName>
+    """
     if client.battle is None:
         client.send_ooc("You have to choose a fighter first!")
         return
@@ -1165,7 +1217,11 @@ def ooc_cmd_create_guild(client, arg):
 
 @command()
 def ooc_cmd_info_guild(client):
-    """Send information about the current guild."""
+    """
+    Send information about the current guild.
+    
+    Usage: /info_guild
+    """
     if client.battle is None:
         client.send_ooc("You have to choose a fighter first!")
         return
