@@ -6,7 +6,7 @@ from aiohttp import web
 
 from server.exceptions import AreaError, ClientError
 
-from server.web_view.gm_panel.commands_meta import CommandLister
+from server.schema.commands_meta import CommandLister
 from server.web_view.gm_panel.sessions import SessionInvalid
 from server.web_view.gm_panel.storage import _command_response
 
@@ -26,7 +26,7 @@ class CommandRoutes:
 
     _COMMAND_NAME_RE = re.compile(r"^[a-z0-9_]+$")
 
-    _DOCS_URL = "https://github.com/Crystalwarrior/KFO-Server/blob/master/docs/commands.md"
+    _DOCS_URL = "https://killing-fever-online.github.io/kfo-server/auto/commands/"
 
     def __init__(self, session_manager, server):
         self._session_manager = session_manager

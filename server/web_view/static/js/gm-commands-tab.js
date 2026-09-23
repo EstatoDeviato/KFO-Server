@@ -20,7 +20,7 @@
  */
 
 /** Fallback used only if the list response omits docs_url. */
-const GM_COMMANDS_DOCS_URL = 'https://github.com/Crystalwarrior/KFO-Server/blob/master/docs/commands.md';
+const GM_COMMANDS_DOCS_URL = 'https://killing-fever-online.github.io/kfo-server/auto/commands/';
 
 class CommandsTab extends TabBase {
     constructor(shell, api, root) {

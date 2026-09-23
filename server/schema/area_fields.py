@@ -28,41 +28,462 @@ from server.exceptions import ClientError
 
 
 # =============================================================================
-# Boolean prefs a CM may toggle (not badged "[gm]")
+# Boolean area prefs: one source of truth for /area_pref, the GM Panel badge
+# and the generated docs/auto/prefs.md (`AREA_PREFS_META` below).
 # =============================================================================
 
+# Each entry explains one boolean `Area` attribute (server/area.py).
+#    description -- what the pref does (rendered in docs/auto/prefs.md).
+#    note        -- optional extra guidance, e.g. "used by /X -- do not change
+#                   directly" (rendered verbatim).
+#    cm_allowed  -- True: any CM may toggle it (GM Panel shows no "[gm]" badge).
+#                   False: only hub owners (GMs)/mods may toggle it.
+#    internal    -- True: system/runtime state, grouped under "do not change
+#                   directly" in the docs rather than as a togglable pref.
+#
+# The generator cross-validates these keys against the live boolean attributes
+# of `Area`, so a new/missing/renamed pref fails the docs build.
+#
+# `AREA_PREF_CM_ALLOWED` is re-derived from `cm_allowed` and is mirrored by
+# `ooc_cmd_area_pref`'s gate (server/commands/hubs.py), which imports it here.
+AREA_PREFS_META = {
+    "showname_changes_allowed": {
+        "description": (
+            "If True, users are allowed to change their showname. If False, "
+            "only CMs and above are allowed to change their showname."
+        ),
+        "cm_allowed": True,
+    },
+    "shouts_allowed": {
+        "description": (
+            "If True, users are allowed to use Objection/Hold It/Take "
+            "That/Custom shouts. If False, only CMs and above can use shouts."
+        ),
+        "cm_allowed": True,
+    },
+    "jukebox": {
+        "description": (
+            "If True, the Jukebox is in play for this area, acting like a "
+            "playlist of music to keep the area DJed automatically. If False, "
+            "music has to be chosen manually."
+        ),
+        "cm_allowed": True,
+    },
+    "non_int_pres_only": {
+        "description": (
+            "If True, all preanimations process the text immediately with no "
+            "delay, equivalent to forcing the 'immediate' checkbox to always "
+            "be on. CMs and above bypass this restriction. If False, "
+            "preanimations stop text processing unless 'immediate' is ticked "
+            "by the user."
+        ),
+        "cm_allowed": True,
+    },
+    "blankposting_allowed": {
+        "description": (
+            "If True, messages are not filtered for blankposting and may "
+            "contain no message or just whitespace. If False, every message "
+            "must contain at least some text. CMs and above bypass this "
+            "restriction."
+        ),
+        "cm_allowed": True,
+    },
+    "blankposting_forced": {
+        "description": (
+            "If True, players may only send blankposts in IC, like the "
+            "per-player /force_blankpost command. If False, normal posting "
+            "rules apply."
+        ),
+        "cm_allowed": True,
+    },
+    "hide_clients": {
+        "description": (
+            "If True, the number of clients present in the area is hidden "
+            "from the client's area list for normal users. This does not "
+            "affect /getarea. If False, the client count is displayed."
+        ),
+        "cm_allowed": True,
+    },
+    "music_autoplay": {
+        "description": (
+            "If True, the current track plays automatically for any user that "
+            "enters the area. If False, the user must use /getmusic to play "
+            "the area's track."
+        ),
+        "cm_allowed": True,
+    },
+    "replace_music": {
+        "description": (
+            "If True, this area's music list completely overwrites the server "
+            "or hub music list. If False, the music lists are stacked."
+        ),
+        "cm_allowed": True,
+    },
+    "client_music": {
+        "description": (
+            "If True, clients are allowed to load a custom music list on the "
+            "client side. If False, client-side music lists are not allowed."
+        ),
+        "cm_allowed": True,
+    },
+    "can_dj": {
+        "description": (
+            "If True, normal users can choose songs in this area. If False, "
+            "only CMs and above can choose songs."
+        ),
+        "cm_allowed": True,
+    },
+    "music_locked": {
+        "description": (
+            "If True, no one can choose songs in this area, regardless of the "
+            "can_dj setting. If False, songs change depending on can_dj."
+        ),
+        "cm_allowed": True,
+    },
+    "can_radio": {
+        "description": (
+            "If True, the /radio command is usable in this area (still "
+            "respecting the other music prefs like can_dj and music_locked). "
+            "If False, radio playback is disabled."
+        ),
+        "cm_allowed": True,
+    },
+    "hidden": {
+        "description": (
+            "If True, this area is hidden from the client area lists. If "
+            "False, the area is visible in the client area lists."
+        ),
+        "cm_allowed": True,
+    },
+    "can_whisper": {
+        "description": (
+            "If True, users are allowed to whisper to each other using the IC "
+            "command /w. If False, only CMs and above can use the IC command."
+        ),
+        "cm_allowed": True,
+    },
+    "can_wtce": {
+        "description": (
+            "If True, anyone can use Witness Testimony/Cross Examination/etc. "
+            "judge buttons. If False, only CMs and above may use the judge "
+            "buttons."
+        ),
+        "cm_allowed": True,
+    },
+    "can_spectate": {
+        "description": (
+            "If True, anyone can switch to a Spectator, a character that "
+            "doesn't permit speaking and hides you from /getarea etc. If "
+            "False, only CMs and above are allowed to be a Spectator."
+        ),
+        "cm_allowed": True,
+    },
+    "can_getarea": {
+        "description": (
+            "If True, anyone can use /getarea to see the players present in "
+            "the area. If False, only CMs and above may use /getarea."
+        ),
+        "cm_allowed": True,
+    },
+    "can_cross_swords": {
+        "description": (
+            "If True, the Cross Swords trial minigame can be started by "
+            "players through IC or /cs. If False, the minigame is disabled."
+        ),
+        "cm_allowed": True,
+    },
+    "can_scrum_debate": {
+        "description": (
+            "If True, a Cross Swords debate can evolve into a Scrum Debate "
+            "minigame. If False, the minigame is disabled."
+        ),
+        "cm_allowed": True,
+    },
+    "can_panic_talk_action": {
+        "description": (
+            "If True, the Panic Talk Action trial minigame can be started by "
+            "players through IC or /pta. If False, the minigame is disabled."
+        ),
+        "cm_allowed": True,
+    },
+    "bg_lock": {
+        "description": (
+            "If True, this area's background cannot be changed by anyone who "
+            "is not a CM or above. If False, normal users can change the "
+            "background, provided they're not muted/spectating and the area "
+            "is not dark."
+        ),
+        "cm_allowed": True,
+    },
+    "force_sneak": {
+        "description": (
+            "If True, all area OOC enter/leave messages are hidden. If False, "
+            "area OOC enter/leave messages are shown unless the player is "
+            "hidden, sneaking, a spectator, etc."
+        ),
+        "cm_allowed": True,
+    },
+    "present_reveals_evidence": {
+        "description": (
+            "If True, presenting a piece of evidence reveals it to everyone. "
+            "If False, evidence visibility rules are stricter."
+        ),
+        "cm_allowed": True,
+    },
+    "ooc_actions_enabled": {
+        "description": (
+            "If True, IC action messages (asterisk/color-3) are mirrored to "
+            "OOC. If False, they are not. Toggleable per-area with "
+            "/ooc_actions."
+        ),
+        "cm_allowed": True,
+    },
+    "can_switch_pos": {
+        "description": (
+            "If True, players can switch positions manually. If False, "
+            "positions can only be changed via links or /forcepos."
+        ),
+        "cm_allowed": True,
+    },
+    "medieval_mode": {
+        "description": (
+            "If True, all IC messages in the area are transformed into Ye "
+            "Olde English. If False, messages are sent as-is."
+        ),
+        "cm_allowed": True,
+    },
+    "public_votes": {
+        "description": (
+            "If True, the /vote command will also reveal who you voted for. "
+            "If False, /vote only tells others that you voted, not your "
+            "target."
+        ),
+        "cm_allowed": True,
+    },
+    "can_cm": {
+        "description": "Whether or not someone can become a Case Maker in this area.",
+        "cm_allowed": False,
+    },
+    "locking_allowed": {
+        "description": (
+            "If True, normal users are allowed to lock this area using /lock. "
+            "If False, only CMs or above, or users with the appropriate keys, "
+            "can lock the area."
+        ),
+        "cm_allowed": False,
+    },
+    "iniswap_allowed": {
+        "description": (
+            "If True, users can change to custom char.ini files not recognized "
+            "by the server's base content. If False, only base content "
+            "characters and char.ini files may be used."
+        ),
+        "cm_allowed": False,
+    },
+    "can_change_status": {
+        "description": (
+            "If True, this area's /status can be changed by normal users. If "
+            "False, it can only be changed by a CM or above."
+        ),
+        "cm_allowed": False,
+    },
+    "use_backgrounds_yaml": {
+        "description": (
+            "If True, the area is only allowed backgrounds from the server's "
+            "backgrounds.yaml configuration file. If False, any custom BG "
+            "name is allowed."
+        ),
+        "cm_allowed": False,
+    },
+    "auto_pair": {
+        "description": (
+            "If True, clients in the same position can pair directly without "
+            "using commands (see also auto_pair_max). If False, pairing "
+            "requires commands."
+        ),
+        "cm_allowed": False,
+    },
+    "auto_pair_cycle": {
+        "description": (
+            "If True and auto_pair is enabled, the currently speaking player "
+            "is always shown in the center. If False, the pairing layout is "
+            "static."
+        ),
+        "cm_allowed": False,
+    },
+    "overlay_lock": {
+        "description": (
+            "If True, only CMs and above can change this area's overlay with "
+            "/overlay. If False, normal users may change it."
+        ),
+        "cm_allowed": False,
+    },
+    "passing_msg": {
+        "description": (
+            "If True, an IC message is sent when a player changes areas in "
+            "this hub. Toggled per-hub by GMs with /toggle_passing_ic."
+        ),
+        "cm_allowed": False,
+    },
+    "locked": {
+        "description": "Whether or not the area is locked.",
+        "note": "Used by /area_lock and /area_unlock. Do not change this directly!",
+        "cm_allowed": False,
+        "internal": True,
+    },
+    "muted": {
+        "description": "Whether or not this area is muted.",
+        "note": "Used by /area_mute and /area_unmute. Do not change this directly!",
+        "cm_allowed": False,
+        "internal": True,
+    },
+    "dark": {
+        "description": "Whether the area is dark or not.",
+        "note": "Used by the /lights command. Do not change this directly!",
+        "cm_allowed": False,
+        "internal": True,
+    },
+    "old_muted": {
+        "description": (
+            "The remembered mute status of the area before a trial minigame "
+            "swapped it; the area returns to this state once the minigame is "
+            "over."
+        ),
+        "note": "Do not change this directly!",
+        "cm_allowed": False,
+        "internal": True,
+    },
+    "recording": {
+        "description": (
+            "Whether the area is currently recording testimony, i.e. a "
+            "Witness Testimony has been started by a CM."
+        ),
+        "note": "Do not change this directly!",
+        "cm_allowed": False,
+        "internal": True,
+    },
+    "battle_started": {
+        "description": "Runtime state of the battle minigame.",
+        "note": "Advanced battle-system flag. Do not change directly!",
+        "cm_allowed": False,
+        "internal": True,
+    },
+    "can_battle": {
+        "description": "Whether the battle minigame may start in this area.",
+        "note": "Advanced battle-system flag; prefer /battle_config.",
+        "cm_allowed": False,
+        "internal": True,
+    },
+    "battle_show_hp": {
+        "description": "Whether battle HP bars are displayed.",
+        "note": "Advanced battle-system flag; set via /battle_config.",
+        "cm_allowed": False,
+        "internal": True,
+    },
+}
+
 # Mirrored by `ooc_cmd_area_pref`'s `cm_allowed` gate (server/commands/hubs.py),
-# which now imports this exact set instead of keeping its own copy.
-AREA_PREF_CM_ALLOWED = frozenset([
-    "showname_changes_allowed",
-    "shouts_allowed",
-    "jukebox",
-    "non_int_pres_only",
-    "blankposting_allowed",
-    "blankposting_forced",
-    "hide_clients",
-    "music_autoplay",
-    "replace_music",
-    "client_music",
-    "can_dj",
-    "music_locked",
-    "can_radio",
-    "hidden",
-    "can_whisper",
-    "can_wtce",
-    "can_spectate",
-    "can_getarea",
-    "can_cross_swords",
-    "can_scrum_debate",
-    "can_panic_talk_action",
-    "bg_lock",
-    "force_sneak",
-    "present_reveals_evidence",
-    "ooc_actions_enabled",
-    "can_switch_pos",
-    "medieval_mode",
-    "public_votes",
-])
+# which imports this exact set instead of keeping its own copy.
+AREA_PREF_CM_ALLOWED = frozenset(
+    name for name, meta in AREA_PREFS_META.items() if meta.get("cm_allowed")
+)
+
+
+# =============================================================================
+# Boolean hub prefs: same shape as AREA_PREFS_META, for AreaManager
+# (server/area_manager.py). All hub prefs are GM-tier; `note` typically names
+# the toggle command. Cross-validated by the docs generator against the live
+# boolean attributes of `AreaManager`.
+# =============================================================================
+
+HUB_PREFS_META = {
+    "arup_enabled": {
+        "description": (
+            "Whether the ARea UPdate system is enabled for this hub, i.e. the "
+            "extra information displayed in the A/M area list and the ability "
+            "to set a /status."
+        ),
+        "note": "Toggled with /arup_enable and /arup_disable.",
+    },
+    "hide_clients": {
+        "description": (
+            "If True, the playercounts of this hub's areas are hidden from "
+            "normal users. If False, playercounts are displayed."
+        ),
+        "note": "Toggled with /hide_clients and /unhide_clients.",
+    },
+    "can_gm": {
+        "description": "Whether players may become Game Masters in this hub.",
+        "note": "Managed through the hub's GM list (/gm, /ungm).",
+    },
+    "remote_gm_only": {
+        "description": (
+            "Whether only remote/system GMs are permitted in this hub, with "
+            "no in-game GM promotion."
+        ),
+    },
+    "replace_music": {
+        "description": (
+            "If True, the hub music list replaces the server's music list "
+            "entirely. If False, the lists are stacked."
+        ),
+        "note": "Toggled with /toggle_replace_music.",
+    },
+    "client_music": {
+        "description": (
+            "If True, clients are allowed to load a custom music list on the "
+            "client side in this hub. If False, client-side music lists are "
+            "not allowed."
+        ),
+    },
+    "single_cm": {
+        "description": (
+            "If True, a hub keeps at most a single Case Maker per area; once "
+            "the last CM leaves, the area resets to its saved originals."
+        ),
+    },
+    "censor_ic": {
+        "description": (
+            "If True, in-character chat in this hub is censored using the "
+            "server's censors.yaml."
+        ),
+    },
+    "censor_ooc": {
+        "description": (
+            "If True, out-of-character chat in this hub is censored using the "
+            "server's censors.yaml."
+        ),
+    },
+    "can_spectate": {
+        "description": (
+            "If True, non-GMs may use a Spectator character in this hub. If "
+            "False, spectator play is restricted."
+        ),
+        "note": "Toggled with /toggle_spectate.",
+    },
+    "can_getareas": {
+        "description": (
+            "If True, normal players may use /getareas in this hub. If False, "
+            "it is restricted to GMs and above."
+        ),
+        "note": "Toggled with /toggle_getareas.",
+    },
+    "passing_msg": {
+        "description": (
+            "If True, an IC message is sent when a player changes areas in "
+            "this hub. If False, none is sent."
+        ),
+        "note": "Toggled with /toggle_passing_ic.",
+    },
+    "autokick_to_latest_area": {
+        "description": (
+            "If True, switching to a character instantly kicks the player to "
+            "that character's latest occupied area. If False, no such kick "
+            "happens."
+        ),
+        "note": "Toggled with /toggle_autokick.",
+    },
+}
 
 
 # =============================================================================

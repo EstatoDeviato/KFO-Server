@@ -1,10 +1,19 @@
-"""Command-output scrubbing and the auto-generated command catalog."""
+"""Command-output scrubbing and the auto-generated command catalog.
+
+Moved here from ``server/web_view/gm_panel/``: the catalog is no longer
+GM-panel-exclusive (the docs generator consumes it too), so it lives in the
+``server.schema`` "single source of truth" package alongside
+``area_fields.py`` / ``link_props.py``.
+
+Like the rest of ``server.schema`` this module is a LEAF with respect to the
+runtime: ``CommandLister`` imports ``server.commands`` lazily inside
+``_build()`` rather than at module scope, so importing this module never pulls
+in the command layer (and there is no import cycle with it — the command layer
+only references ``CommandLister`` inside the function-level ``reload()``).
+"""
 
 import inspect
 import re
-
-from server import commands
-
 
 
 class CommandOutputScrubber:
@@ -43,14 +52,17 @@ class CommandOutputScrubber:
 
 class CommandLister:
     """
-    Auto-generates the Commands tab's searchable cookbook from the command
-    layer's own submodules (`server/commands/`): each submodule's `__all__`
-    (or, failing that, every `ooc_cmd_*` in its namespace) is enumerated, with
-    the first docstring line as the summary and any `usage:` line as usage.
+    Auto-generates the Commands tab's searchable cookbook — and, through the
+    same catalog, ``docs/auto/commands.md`` — from the command layer's own
+    submodules (`server/commands/`): each submodule's `__all__` (or, failing
+    that, every `ooc_cmd_*` in its namespace) is enumerated, with the full
+    docstring, the `usage:` line, the `mod_only(...)` gate and every declared
+    `Arg`.
 
-    This is a UX aid only -- it does not gate what `POST /api/gm/commands/run`
-    will execute; the live `mod_only(...)` checks inside the command layer are
-    the only real gate. Cached at `_cache` after the first build.
+    For the GM panel this is a UX aid only — it does not gate what
+    `POST /api/gm/commands/run` will execute; the live `mod_only(...)` checks
+    inside the command layer are the only real gate. For the docs generator it
+    is the single source of truth. Cached at `_cache` after the first build.
     """
 
     _cache = None
@@ -120,12 +132,15 @@ class CommandLister:
             "module": module_name,
             "summary": summary,
             "usage": " ".join(usage_lines),
+            "docs": doc,
             "permission": cls._permission(func),
             "args": [cls._arg_spec(spec) for spec in getattr(func, "command_spec", ())],
         }
 
     @classmethod
     def _build(cls):
+        from server import commands  # lazy: keep this schema module a leaf
+
         groups = []
         for module in commands.submodules():
             module_name = module.__name__.split(".")[-1]

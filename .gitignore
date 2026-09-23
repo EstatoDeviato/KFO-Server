@@ -16,6 +16,12 @@ characters/
 AGENTS.md
 docs/ai/
 
+### Generated docs (build artifacts, produced by scripts/generate_docs.py)
+docs/auto/
+
+### mkdocs build output
+site/
+
 ### Python related
 # Virtual environments
 venv/
