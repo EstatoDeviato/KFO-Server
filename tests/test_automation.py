@@ -64,6 +64,13 @@ class FakeAreaManager:
     def server(self):
         return self.hub_manager.server
 
+    @property
+    def clients(self):
+        clients = set()
+        for area in self.areas:
+            clients = clients | area.clients
+        return clients
+
     def broadcast_ooc(self, msg, exclude_list=None):
         pass
 
@@ -1243,6 +1250,93 @@ def test_get_script_client_reanchors_parked_executor(monkeypatch):
     assert executor in area1.clients
     assert executor not in area2.clients
     assert executor in server.client_manager.clients
+
+
+@pytest.mark.parametrize("can_gm", [True, False])
+def test_hub_shrink_disposes_automation_executors(monkeypatch, can_gm):
+    """`HubManager._clean_up_clients` (excess hubs removed during a YAML reload)
+    detaches [SCRIPT] executors instead of running `set_area`, which raises
+    for automation clients and would abort the reload, stranding the executor
+    registered in `client_manager.clients` while anchored to a popped hub."""
+    import server.remote_client as remote_client
+    from server.hub_manager import HubManager
+
+    monkeypatch.setattr(remote_client, "_ensure_system_ipid", lambda db: None)
+
+    server = _server_with_client_manager()
+    hm = HubManager.__new__(HubManager)
+    hm.server = server
+
+    dying = FakeAreaManager()
+    dying.can_gm = can_gm
+    dying.hub_manager.server = server
+    area = Area(dying, "Test Area")
+    dying.areas.append(area)
+    hm.hubs = [dying]
+
+    executor = area.get_script_client()
+    assert executor in server.client_manager.clients
+    assert executor in area.clients
+    if can_gm:
+        assert executor in dying.owners
+    else:
+        assert executor in area._owners
+
+    hm._clean_up_clients(dying)
+
+    assert executor not in server.client_manager.clients
+    assert executor not in area.clients
+    assert executor not in area._owners
+    assert executor not in dying.owners
+    assert executor._in_area is False
+
+
+def test_area_kick_ignores_remote_clients(monkeypatch):
+    """/area_kick *** (and every other target flavor) filters out RemoteClients,
+    so a hub that only contains [SCRIPT]/[GM:*]/[ADMIN:*] panel phantoms reports
+    "No targets found" instead of pulling the executors around with `set_area`
+    (which raises for non-GM executors and aborts the kick loop)."""
+    import server.remote_client as remote_client
+    from server.client_manager import ClientManager
+    from server.remote_client import RemoteClient
+
+    monkeypatch.setattr(remote_client, "_ensure_system_ipid", lambda db: None)
+
+    server = _server_with_client_manager()
+    manager = FakeAreaManager()
+    manager.hub_manager.server = server
+    area1 = Area(manager, "Area 1")
+    area2 = Area(manager, "Area 2")
+    manager.areas.extend([area1, area2])
+
+    # A GM-panel phantom and the area's [SCRIPT] executor share the hub.
+    phantom = RemoteClient(server, name="[GM:Owner]")
+    phantom.join_area(area1)
+    manager.owners.add(phantom)
+    area1._owners.add(phantom)
+    executor = area1.get_script_client()
+    assert executor in manager.clients
+
+    output = []
+
+    gm = ClientManager.Client(server, FakeTransport(), 1, 1)
+    gm.showname = "GM"
+    gm.char_id = 0
+    gm.is_mod = True
+    gm.area = area2
+    gm.send_ooc = output.append
+    gm.send_command = lambda *a, **k: None
+
+    commands.call(gm, "area_kick", "***")
+
+    assert output == ["No targets found by search term '***'."]
+    # No executor or phantom was swept out of its anchor or unregistered.
+    assert executor in server.client_manager.clients
+    assert executor in area1.clients
+    assert phantom in server.client_manager.clients
+    assert phantom in area1.clients
+    assert executor in manager.owners
+    assert phantom in manager.owners
 
 
 # --- /stop_demo ---

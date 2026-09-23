@@ -391,7 +391,7 @@ class AreaManager:
                 raise AreaError("May not remove last existing area!")
         clients = area.clients.copy()
         for client in clients:
-            if getattr(client, "is_automation", False):
+            if client.is_automation:
                 area.area_manager.owners.discard(client)
                 area._owners.discard(client)
                 client.leave_area()

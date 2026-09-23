@@ -38,6 +38,10 @@ class ClientManager:
             self.name = ""
             self.iniswap = ""
             self.is_mod = False
+            # Automation executors ([SCRIPT], see Area.get_script_client) set
+            # this to True; set_area and hub/area teardown rely on it to know
+            # a client is pinned to its area and must be destroyed, not moved.
+            self.is_automation = False
             self.mod_profile_name = None
             self.is_dj = True
             self.can_wtce = True
@@ -1333,7 +1337,7 @@ class ClientManager:
             :param target_pos: which position to target in the new area
             """
             old_area = self.area
-            if getattr(self, "is_automation", False):
+            if self.is_automation:
                 if not self.is_gm:
                     raise ClientError("The automation executor cannot leave its area.")
                 if old_area.area_manager != area.area_manager:
