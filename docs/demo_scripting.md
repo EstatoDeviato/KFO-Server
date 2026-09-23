@@ -77,7 +77,7 @@ BN#BOTC-TownSquare%
 
 ### Commands
 
-Any `/` command works, exactly as if a User typed it. ([Command Reference](https://github.com/Crystalwarrior/KFO-Server/blob/master/docs/commands.md)) Remember,
+Any `/` command works, exactly as if a User typed it. ([Command Reference](auto/commands.md)) Remember,
 commands need their `%`:
 
 ```

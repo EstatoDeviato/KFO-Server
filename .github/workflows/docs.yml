@@ -1,0 +1,71 @@
+name: docs
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # PRs and pushes: regenerate the docs from the code, enforce the generator's
+  # structural validations + idempotency, and build the site. (The legacy
+  # pythonapp.yml only lints; the local test suite is run by developers.)
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-docs.txt
+      - name: Generate docs
+        run: python scripts/generate_docs.py --out docs/auto
+      - name: Validate sources and regenerate docs
+        run: python scripts/generate_docs.py --out docs/auto --check
+      - name: Build site (strict)
+        run: mkdocs build --strict
+
+  # Pushes to the default branch: build the site and publish it to GitHub
+  # Pages. Requires Settings -> Pages -> Source: "GitHub Actions" (one-time).
+  deploy:
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+    needs: check
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-docs.txt
+      - name: Generate docs
+        run: python scripts/generate_docs.py --out docs/auto
+      - name: Build site
+        run: mkdocs build --strict --site-dir site
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

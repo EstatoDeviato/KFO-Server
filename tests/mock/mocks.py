@@ -41,12 +41,15 @@ class MockClient:
 class MockClientManager:
     """Minimal client manager stub used by AOProtocol.
 
-    Only the `new_client_preauth` method is used during handshake to apply
-    a pre-auth limit; here we simply allow all connections.
+    Only the pre-auth limit is enforced; here we simply allow all connections.
     """
 
     def new_client_preauth(self, client: "MockClient") -> bool:  # noqa: ARG002
         return True
+
+    def check_connection_rate(self, ipid) -> bool:  # noqa: ARG002
+        """Allow all connections regardless of recent connect frequency."""
+        return False
 
 
 class MockServer:

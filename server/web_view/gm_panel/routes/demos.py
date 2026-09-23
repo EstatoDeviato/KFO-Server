@@ -15,7 +15,7 @@ from aiohttp import web
 from server.script_runner import parse_demo_description
 from server.scripting import live_path_menu
 
-from server.web_view.gm_panel.commands_meta import CommandLister
+from server.schema.commands_meta import CommandLister
 from server.web_view.gm_panel.serializers import EvidenceSerializer
 
 

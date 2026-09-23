@@ -217,6 +217,13 @@ def ooc_cmd_judgelog(client):
 
 @command()
 def ooc_cmd_afk(client):
+    """
+    Mark yourself as AFK (Away From Keyboard).
+    This adds an AFK marker to your character's IC/OOC messages and to the
+    /getarea listing; use the command again to mark yourself back. Mods can
+    set or clear AFK status on any player with /setafk.
+    Usage: /afk
+    """
     client.server.client_manager.toggle_afk(client)
 
 

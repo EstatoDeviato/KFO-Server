@@ -18,7 +18,7 @@ from aiohttp import web
 from server import commands
 from server.exceptions import ClientError, ArgumentError, AreaError, ServerError
 
-from server.web_view.gm_panel.commands_meta import CommandOutputScrubber
+from server.schema.commands_meta import CommandOutputScrubber
 from server.remote_client import RemoteClient
 
 logger = logging.getLogger("gm_panel")
@@ -672,7 +672,7 @@ class GMSessionManager:
         self._sessions = {}
         self._pending_tokens = {}
         self._pending_hub_auths = {}
-        self._session_ttl = int(config.get("session_ttl_seconds", 28800))
+        self._session_ttl = int(config.get("session_ttl_seconds", 600))
         self._login_token_ttl = int(config.get("login_token_ttl_seconds", 60))
         self._hub_auth_ttl = int(config.get("login_hub_ttl_seconds", 300))
         self._sweep_handle = None

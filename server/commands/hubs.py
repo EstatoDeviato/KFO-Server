@@ -481,6 +481,8 @@ def ooc_cmd_area_pref(client, pref, value):
     Toggle a preference on/off for an area.
     Leave pref out to see available prefs.
     Leave on/true and off/false to toggle the pref.
+    Commands which depend on a pref being set are marked \"(CM)\" or \"(GM)\" in
+    the server documentation; see the Area Prefs page there for the full list.
     Usage:  /area_pref [pref] [on/true/off/false]
     """
     # Single source of truth: `server/schema/area_fields.py`. The GM panel

@@ -262,7 +262,7 @@ gm_panel:
   enabled: false
   port: 27018
   host: "0.0.0.0"
-  session_ttl_seconds: 28800
+  session_ttl_seconds: 600         # remote admin/GM sessions expire after 10 min
   login_token_ttl_seconds: 60       # one-time /gmpanel link expires fast
   login_hub_ttl_seconds: 300        # time a gm login may sit on the hub picker
   users:
