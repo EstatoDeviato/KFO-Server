@@ -1,0 +1,55 @@
+{#-
+  Overrides partials/toc-item.html (mkdocs-material 9.x).
+
+  Makes the sidebar table of contents collapsible: headings that have
+  sub-headings render as the theme's own md-nav__item--nested toggle nodes
+  (the exact checkbox markup the left sidebar sections use), so every branch
+  starts collapsed and can be expanded/collapsed in place. Leaf headings keep
+  the stock plain-link rendering.
+
+  Each toggle id is derived from the heading's URL fragment (mkdocs slugs
+  guarantee those are unique within a page), so this file is self-contained
+  and partials/toc.html stays stock. javascripts/toc-collapse.js auto-expands
+  the branch of the heading currently being read.
+-#}
+{% set toc_id = "__toc_" ~ (toc_item.url | replace("/", "_") | replace(".", "_") | replace("#", "_")) %}
+<li class="md-nav__item{% if toc_item.children %} md-nav__item--nested{% endif %}">
+  {% if toc_item.children %}
+    <input class="md-nav__toggle md-toggle" type="checkbox" id="{{ toc_id }}">
+    <div class="md-nav__link md-nav__container">
+      <a href="{{ toc_item.url }}" class="md-nav__link">
+        <span class="md-ellipsis">
+          {% if toc_item.typeset %}
+            <span class="md-typeset">
+              {{ toc_item.typeset.title }}
+            </span>
+          {% else %}
+            {{ toc_item.title }}
+          {% endif %}
+        </span>
+      </a>
+      <label class="md-nav__link" for="{{ toc_id }}" tabindex="0">
+        <span class="md-nav__icon md-icon"></span>
+      </label>
+    </div>
+    <nav class="md-nav" aria-label="{{ toc_item.title | striptags | e }}" aria-expanded="false">
+      <ul class="md-nav__list">
+        {% for toc_item in toc_item.children %}
+          {% include "partials/toc-item.html" %}
+        {% endfor %}
+      </ul>
+    </nav>
+  {% else %}
+    <a href="{{ toc_item.url }}" class="md-nav__link">
+      <span class="md-ellipsis">
+        {% if toc_item.typeset %}
+          <span class="md-typeset">
+            {{ toc_item.typeset.title }}
+          </span>
+        {% else %}
+          {{ toc_item.title }}
+        {% endif %}
+      </span>
+    </a>
+  {% endif %}
+</li>
