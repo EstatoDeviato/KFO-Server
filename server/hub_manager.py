@@ -99,7 +99,7 @@ class HubManager:
         """
         clients = h.clients.copy()
         for client in clients:
-            if getattr(client, "is_automation", False):
+            if client.is_automation:
                 h.owners.discard(client)
                 for area in h.areas:
                     area._owners.discard(client)
