@@ -72,10 +72,19 @@ You can also use docker to run KFO-server. First you need to install [Docker](ht
 
 Once you have everything configured, do `docker-compose up`. It will build the image and start tsuserver up for you. If you accidentally restart the server, the container will automatically start back up. If you're not understanding why it's starting, try starting it up manually:
 
+## Documentation
+
+To view the docs on your own computer, do these two things:
+
+1. Run `python scripts/generate_docs.py`. This creates the doc pages for you.
+2. Run `venv\Scripts\python.exe -m mkdocs serve` (on Linux, use `venv/bin/python -m mkdocs serve` instead). Then open the link it shows you in your browser.
+
+That's it - you can read the site just like it would appear online. The rest is handled by the github workflow file.
+
 ## Pro Tips
 
 * To keep the server running even if your login shell is closed, use a multiplexer, such as screen or tmux.
-* For more info about available command, see [Commands](https://github.com/Crystalwarrior/KFO-Server/blob/master/docs/commands.md). You may also use the /help command on the server.
+* For more info about available command, see [Commands](https://crystalwarrior.github.io/kfo-server/auto/commands/). You may also use the /help command on the server.
 * For more info about Python virtual environments, refer to ["Creating Virtual Environments"](https://docs.python.org/3/library/venv.html#creating-virtual-environments)
 * In order to join your server, it has to be accessible to the public internet. You might need to forward the ports in config.yaml to make this work.
 * If you can't portforward, you may want to check out [ngrok](https://ngrok.com/). It's a service that allows you to expose your local server to the internet. It's free, but you can also pay for a subscription to get more features.

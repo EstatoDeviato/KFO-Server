@@ -18,7 +18,7 @@ from aiohttp import web
 from server import commands
 from server.exceptions import ClientError, ArgumentError, AreaError, ServerError
 
-from server.web_view.gm_panel.commands_meta import CommandOutputScrubber
+from server.schema.commands_meta import CommandOutputScrubber
 from server.remote_client import RemoteClient
 
 logger = logging.getLogger("gm_panel")

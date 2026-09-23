@@ -203,8 +203,17 @@ def ooc_cmd_evidence_present(client, arg):
 )
 def ooc_cmd_evidence_mod(client, mode):
     """
-    Change the evidence privilege mode. Refer to the documentation
-    for more information on the function of each mode.
+    Change the evidence privilege mode.
+    Modes:
+        FFA: Everyone can add, edit and remove evidence.
+        Mods: Only moderators can add, edit or remove evidence.
+        CM: Only the Case Maker (see /cm) and moderators can add, edit or
+            remove evidence.
+        HiddenCM: Same as CM, but every piece of evidence has a preset
+            "owner's position" set by a CM or moderator, so only one
+            side/position of the court can see it (dark-area evidence
+            rules apply).
+    Leave the mode blank to see the area's current mode.
     Usage: /evidence_mod <FFA|Mods|CM|HiddenCM>
     """
     if mode is None or mode == client.area.evidence_mod:

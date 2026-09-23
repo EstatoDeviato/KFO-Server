@@ -327,7 +327,7 @@ def reload():
     # The GM panel caches its auto-generated command catalog; drop the cache
     # so the panel picks up the freshly reloaded command definitions.
     try:
-        from server.web_view.gm_panel.commands_meta import CommandLister
+        from server.schema.commands_meta import CommandLister
 
         CommandLister.invalidate()
     except ImportError:

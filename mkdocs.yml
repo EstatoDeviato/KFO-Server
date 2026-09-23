@@ -1,0 +1,63 @@
+site_name: KFO Server Docs
+site_description: Documentation for the KFO-Server Attorney Online server.
+site_url: https://crystalwarrior.github.io/kfo-server/
+repo_url: https://github.com/Crystalwarrior/KFO-Server
+repo_name: Crystalwarrior/KFO-Server
+# Docs contributions happen through GitHub (no prose.io). edit_uri drives the
+# edit/view/new action buttons rendered by overrides/partials/actions.html;
+# generated pages under docs/auto/ are excluded from those buttons.
+edit_uri: https://github.com/Crystalwarrior/KFO-Server/edit/master/docs/
+
+theme:
+  name: material
+  # KFO-Wiki look: dark neutral theme with red accents.
+  custom_dir: overrides
+  logo: img/favicon.ico
+  favicon: img/favicon.ico
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    scheme: slate
+    primary: black
+    accent: red
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.footer
+    - toc.integrate
+    - content.code.annotate
+    - content.action.edit
+    - content.action.view
+    - content.action.new
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - tables
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+  # OpenGraph/preview cards, like the wiki (needs mkdocs-material[imaging] and
+  # the native Cairo library at runtime). Set SOCIAL=false to skip card
+  # generation on machines without Cairo installed.
+  - social:
+      enabled: !ENV [SOCIAL, true]
+
+# Internal planning docs never reach the public site.
+exclude_docs: ai/**
+
+nav:
+  - Home: index.md
+  - Reference:
+      - Commands: auto/commands.md
+      - Area Prefs: auto/prefs.md
+      - Hub Prefs: auto/hub_prefs.md
+  - Guides:
+      - In-Character Commands: in_character.md
+      - Demo Scripting: demo_scripting.md

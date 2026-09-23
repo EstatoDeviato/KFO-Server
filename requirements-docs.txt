@@ -1,0 +1,7 @@
+# Docs build dependencies: mkdocs + the Material theme.
+# The [imaging] extra provides PIL/cairo for the `social` plugin's preview
+# cards (KFO-Wiki style). Installed alongside requirements.txt by
+# .github/workflows/docs.yml and needed locally for `mkdocs serve` /
+# `mkdocs build` after running `python scripts/generate_docs.py` first.
+mkdocs>=1.6,<2
+mkdocs-material[imaging]>=9.5,<10

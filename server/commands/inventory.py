@@ -150,8 +150,10 @@ def ooc_cmd_inventory_get(client, target, name):
 )
 def ooc_cmd_inventory_add(client, target, name, description, image):
     """
-    Use /inventory_add <target> [name] [description] [image] to create a new piece of evidence from scratch,
-    adding it  into their inventory.
+    Create a new piece of evidence from scratch and add it into the target's
+    inventory.
+    For arguments containing spaces, surround them with quotation marks, e.g.
+    /inventory_add 1 "The Chair" "It's a chair." chair.png
     Usage: /inventory_add <target> [name] [description] [image]
     """
     target = get_inventory_target(client, target)
