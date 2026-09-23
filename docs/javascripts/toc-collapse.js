@@ -5,7 +5,9 @@
  *
  * All TOC branches start collapsed. As you scroll, the branch(es) containing
  * the heading that enters the reading band open; a link arriving with a
- * #fragment (or a mid-page hash change) opens its branch immediately. Branches
+ * #fragment, a mid-page hash change, or a click on any in-page anchor opens
+ * the heading's branch immediately, so landing on (or jumping to)
+ * `page/#some-heading` reveals the section that heading lives in. Branches
  * that were opened stay open, and a manual collapse is respected while that
  * heading stays in view (it only re-opens when the heading re-enters the band).
  */
@@ -87,6 +89,30 @@
     if (location.hash) {
       setTimeout(openHash, 0);
     }
+
+    // Clicking any in-page anchor reveals the branch its heading lives in.
+    // This covers content paragraph links and TOC links even when the hash
+    // does not change (e.g. re-clicking the same link), which fires no
+    // hashchange event. The browser still performs the normal anchor jump.
+    document.addEventListener("click", function (ev) {
+      var target = ev.target;
+      if (!target || typeof target.closest !== "function") {
+        return;
+      }
+      var link = target.closest('a[href^="#"]');
+      if (!link) {
+        return;
+      }
+      var id;
+      try {
+        id = decodeURIComponent(link.getAttribute("href").slice(1));
+      } catch (err) {
+        return;
+      }
+      if (id && linkByHeadingId[id]) {
+        openBranch(linkByHeadingId[id]);
+      }
+    });
 
     // When a heading scrolls into the reading band, open its branch.
     var observer = new IntersectionObserver(function (changes) {
