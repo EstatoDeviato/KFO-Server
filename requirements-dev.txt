@@ -1,5 +1,0 @@
-# Test/dev dependencies: pytest for the test suite in tests/.
-# Installed by .github/workflows/docs.yml alongside requirements.txt and
-# requirements-docs.txt (the legacy pythonapp.yml only lints, and tox.ini
-# references this file for its testenv).
-pytest>=8.0,<9
