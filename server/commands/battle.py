@@ -1,13 +1,13 @@
-import yaml
 import random
-import os
-import shlex
+from pathlib import Path
+
+import yaml
 
 from server.client_manager import ClientManager
 from server.constants import derelative
 
-from . import mod_only, command, Arg
-from .. import commands
+from . import Arg, command, mod_only
+
 
 __all__ = [
     "ooc_cmd_choose_fighter",
@@ -35,7 +35,14 @@ __all__ = [
 ]
 
 
-battle_effects = [
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+FIGHTER_STORAGE = Path("storage/battlesystem")
+
+# Keep this as a tuple so the order shown by /battle_effects stays stable.
+BATTLE_EFFECTS = (
     "atkraise",
     "sparaise",
     "defraise",
@@ -69,64 +76,325 @@ battle_effects = [
     "enraged",
     "sleep",
     "healstatus",
-]
+)
+
+# Effects that make a move supportive rather than offensive.
+ALLY_EFFECTS = {
+    "heal",
+    "healstatus",
+    "atkraiseally",
+    "defraiseally",
+    "sparaiseally",
+    "spdraiseally",
+    "speraiseally",
+}
+
+# Effect name -> (fighter attribute, human-readable label)
+SELF_RAISE_EFFECTS = {
+    "atkraise": ("atk", "attack"),
+    "defraise": ("defe", "defense"),
+    "sparaise": ("spa", "special attack"),
+    "spdraise": ("spd", "special defense"),
+    "speraise": ("spe", "speed"),
+}
+
+TARGET_LOWER_EFFECTS = {
+    "atkdown": ("atk", "attack"),
+    "defdown": ("defe", "defense"),
+    "spadown": ("spa", "special attack"),
+    "spddown": ("spd", "special defense"),
+    "spedown": ("spe", "speed"),
+}
+
+ALLY_RAISE_EFFECTS = {
+    "atkraiseally": ("atk", "attack"),
+    "defraiseally": ("defe", "defense"),
+    "sparaiseally": ("spa", "special attack"),
+    "spdraiseally": ("spd", "special defense"),
+    "speraiseally": ("spe", "speed"),
+}
+
+STEAL_EFFECTS = {
+    "stealatk": ("atk", "the attack"),
+    "stealdef": ("defe", "the defense"),
+    "stealspa": ("spa", "the special attack"),
+    "stealspd": ("spd", "the special defense"),
+    "stealspe": ("spe", "the speed"),
+    "stealmana": ("mana", "mana"),
+}
+
+STAT_NAMES = ("hp", "mana", "atk", "defe", "spa", "spd", "spe")
+
+# Command-facing stat names -> YAML keys used by fighter definitions.
+STAT_STORAGE_KEYS = {
+    "hp": "HP",
+    "mana": "MANA",
+    "atk": "ATK",
+    "defe": "DEF",
+    "spa": "SPA",
+    "spd": "SPD",
+    "spe": "SPE",
+}
+
+BATTLE_CONFIG_FLOATS = {
+    "critical_bonus": "battle_critical_bonus",
+    "bonus_malus": "battle_bonus_malus",
+    "poison_damage": "battle_poison_damage",
+    "burn_damage": "battle_burn_damage",
+    "freeze_damage": "battle_freeze_damage",
+    "enraged_bonus": "battle_enraged_bonus",
+    "stolen_stat": "battle_stolen_stat",
+}
+
+BATTLE_CONFIG_POSITIVE_INTS = {
+    "paralysis_rate": "battle_paralysis_rate",
+    "critical_rate": "battle_critical_rate",
+    "confusion_rate": "battle_confusion_rate",
+}
+
+BATTLE_CONFIG_NON_NEGATIVE_INTS = {
+    "min_multishot": "battle_min_multishot",
+    "max_multishot": "battle_max_multishot",
+}
+
+# These values are used as divisors and therefore cannot be zero.
+POSITIVE_FLOAT_CONFIGS = {
+    "bonus_malus",
+    "poison_damage",
+    "burn_damage",
+    "freeze_damage",
+    "stolen_stat",
+}
+
+BATTLE_CONFIG_NAMES = (
+    "paralysis_rate",
+    "critical_rate",
+    "critical_bonus",
+    "bonus_malus",
+    "poison_damage",
+    "show_hp",
+    "min_multishot",
+    "max_multishot",
+    "burn_damage",
+    "freeze_damage",
+    "confusion_rate",
+    "enraged_bonus",
+    "stolen_stat",
+)
+
+
+# ---------------------------------------------------------------------------
+# Generic helpers
+# ---------------------------------------------------------------------------
+
+def _fighter_storage_path(name):
+    """Return the sanitized path used for a fighter YAML file."""
+    normalized_name = derelative(name.strip().lower())
+    return FIGHTER_STORAGE / f"{normalized_name}.yaml"
+
+
+def _fighter_exists(name):
+    """Return True when a fighter YAML file exists."""
+    return _fighter_storage_path(name).is_file()
+
+
+def _load_fighter(name):
+    """Load a fighter definition from YAML."""
+    path = _fighter_storage_path(name)
+
+    with path.open("r", encoding="utf-8") as stream:
+        return yaml.safe_load(stream) or {}
+
+
+def _save_fighter(name, fighter):
+    """Persist a fighter definition to YAML using a deterministic format."""
+    FIGHTER_STORAGE.mkdir(parents=True, exist_ok=True)
+    path = _fighter_storage_path(name)
+
+    with path.open("w", encoding="utf-8") as stream:
+        yaml.safe_dump(
+            fighter,
+            stream,
+            allow_unicode=True,
+            sort_keys=False,
+        )
+
+
+def _battle_fighter_exists(client):
+    """Return True when the client currently has a selected fighter."""
+    return client.battle is not None
+
+
+def _get_fighter_ids(area):
+    """Build a quick client-id -> client lookup for the current area."""
+    return {fighter.id: fighter for fighter in area.fighters}
+
+
+def _finish_turn_if_ready(area):
+    """
+    Resolve the current turn once every fighter has selected an action.
+
+    Both /use_move and /skip_move used to contain this exact block.
+    Keeping it here prevents the two commands from drifting apart.
+    """
+    if area.num_selected_move != len(area.fighters):
+        return
+
+    area.fighters = start_battle_animation(area)
+    area.num_selected_move = 0
+
+    if not area.battle_started:
+        area.battle_started = True
+
+    # A finished battle leaves the fighter list empty.
+    if not area.fighters:
+        area.battle_started = False
+
+
+def _send_fighter_message(client, include_moves=False):
+    """Build and send a fighter information message."""
+    battle = client.battle
+    if battle is None:
+        return
+
+    lines = [f"\n👤 {battle.fighter} 👤:"]
+
+    if battle.status is not None:
+        lines.append(f"Status 🌈: {battle.status}")
+
+    lines.extend(
+        [
+            "",
+            f"HP 💗: {battle.hp:.2f}/{battle.maxhp}",
+            f"MANA 💧: {battle.mana:.2f}",
+            f"ATK 🗡️: {battle.atk:.2f}",
+            f"DEF 🛡️: {battle.defe:.2f}",
+            f"SPA ✨: {battle.spa:.2f}",
+            f"SPD 🔮: {battle.spd:.2f}",
+            f"SPE 💨: {battle.spe:.2f}",
+            "",
+        ]
+    )
+
+    if include_moves:
+        for move_id, move in enumerate(battle.moves):
+            lines.extend(
+                [
+                    f"🌠 [{move_id}]{move.name} 🌠:",
+                    f"ManaCost 💧: {move.cost}",
+                    f"Type 💠: {move.type}",
+                    f"Power 💪: {move.power}",
+                    f"Accuracy 🔎: {move.accuracy}%",
+                ]
+            )
+
+            if move.effect:
+                lines.append("Effects 🔰:")
+                lines.extend(f"- {effect}" for effect in move.effect)
+
+            lines.append("")
+
+    client.send_ooc("\n".join(lines))
 
 
 def send_info_fighter(client):
-    """
-    Prepare the message about fighter info
-    """
-    msg = f"\n👤 {client.battle.fighter} 👤:\n"
-    if client.battle.status != None:
-        msg += f"Status 🌈: {client.battle.status}\n"
-    msg += f"\nHP 💗: {round(client.battle.hp,2)}/{client.battle.maxhp}\nMANA 💧: {round(client.battle.mana,2)}\nATK 🗡️: {round(client.battle.atk,2)}\nDEF 🛡️: {round(client.battle.defe,2)}\nSPA ✨: {round(client.battle.spa,2)}\nSPD 🔮: {round(client.battle.spd,2)}\nSPE 💨: {round(client.battle.spe,2)}\n\n"
-    for move in client.battle.moves:
-        move_id = client.battle.moves.index(move)
-        msg += f"🌠 [{move_id}]{move.name} 🌠:\nManaCost 💧: {move.cost}\nType 💠: {move.type}\nPower 💪: {move.power}\nAccuracy 🔎: {move.accuracy}%\n"
-        if move.effect != []:
-            msg += "Effects 🔰:\n"
-            for effect in move.effect:
-                msg += f"- {effect}\n"
-        msg += "\n"
-    client.send_ooc(msg)
-    
+    """Send fighter stats and move information."""
+    _send_fighter_message(client, include_moves=True)
+
 
 def send_stats_fighter(client):
-    """
-    Prepare the message about fighter stats
-    """
-    msg = f"\n👤 {client.battle.fighter} 👤:\n"
-    if client.battle.status != None:
-        msg += f"Status 🌈: {client.battle.status}\n"
-    msg += f"\nHP 💗: {round(client.battle.hp,2)}/{client.battle.maxhp}\nMANA 💧: {round(client.battle.mana,2)}\nATK 🗡️: {round(client.battle.atk,2)}\nDEF 🛡️: {round(client.battle.defe,2)}\nSPA ✨: {round(client.battle.spa,2)}\nSPD 🔮: {round(client.battle.spd,2)}\nSPE 💨: {round(client.battle.spe,2)}\n\n"
-    client.send_ooc(msg)
+    """Send fighter stats without listing the moves."""
+    _send_fighter_message(client, include_moves=False)
 
+
+def find_guild(client):
+    """
+    Return the guild containing the client, or None when it belongs to none.
+    """
+    for guild_name, members in client.area.battle_guilds.items():
+        if client in members:
+            return guild_name
+    return None
+
+
+def _remove_from_guild(client, *, notify=False):
+    """
+    Remove a client from its current guild.
+
+    Returns the guild name, or None if the client is not in a guild.
+    """
+    if client.battle is None or client.battle.guild is None:
+        return None
+
+    guild = client.battle.guild
+    members = client.area.battle_guilds.get(guild)
+
+    if members is not None and client in members:
+        members.remove(client)
+
+        if not members:
+            client.area.battle_guilds.pop(guild, None)
+
+    client.battle.guild = None
+
+    if notify:
+        client.send_ooc("You have been removed from the current guild")
+
+    return guild
+
+
+def _add_to_guild(client, guild):
+    """Add a client to a guild and update the BattleChar reference."""
+    client.area.battle_guilds.setdefault(guild, []).append(client)
+    client.battle.guild = guild
+
+
+def reload_fighter(client, char=None):
+    """
+    Rebuild client.battle from the fighter YAML definition.
+
+    When ``char`` is supplied, it is used directly so a command can reload
+    the battle object without reading the file a second time after saving.
+    """
+    if char is None:
+        char = _load_fighter(client.battle.fighter)
+
+    fighter_name = client.battle.fighter
+    client.battle = ClientManager.BattleChar(client, fighter_name, char)
+    client.battle.guild = find_guild(client)
+
+
+# ---------------------------------------------------------------------------
+# Fighter commands
+# ---------------------------------------------------------------------------
 
 @command(Arg("arg", rest=True, default="", help="fighter name"))
 def ooc_cmd_choose_fighter(client, arg):
     """
-    Allow you to choose a fighter from the list of the server.
-    You will receive its stats and its moves.
-    Usage: /choose_fighter NameFighter
+    Choose a fighter from the server list.
+
+    Usage: /choose_fighter <NameFighter>
     """
-    if f"{arg.lower()}.yaml" in os.listdir("storage/battlesystem"):
-        with open(
-            f"storage/battlesystem/{arg.lower()}.yaml", "r", encoding="utf-8"
-        ) as c_load:
-            char = yaml.safe_load(c_load)
-            client.battle = ClientManager.BattleChar(client, arg.lower(), char)
-        send_info_fighter(client)
-    else:
+    fighter_name = derelative(arg.strip().lower())
+
+    if not (FIGHTER_STORAGE / f"{fighter_name}.yaml").is_file():
         client.send_ooc("No fighter has this name!")
+        return
+
+    char = _load_fighter(fighter_name)
+    client.battle = ClientManager.BattleChar(client, fighter_name, char)
+    client.battle.guild = find_guild(client)
+    send_info_fighter(client)
 
 
 @command()
 def ooc_cmd_info_fighter(client):
     """
-    Send info about your fighter.
+    Send information about the currently selected fighter.
+    
     Usage: /info_fighter
     """
-    if client.battle is not None:
+    if _battle_fighter_exists(client):
         send_info_fighter(client)
     else:
         client.send_ooc("You have to choose a fighter first!")
@@ -138,60 +406,56 @@ def ooc_cmd_info_fighter(client):
     Arg("hp", float),
     Arg("mana", float),
     Arg("atk", float),
-    Arg("def", float),
+    Arg("defe", float),
     Arg("spa", float),
     Arg("spd", float),
     Arg("spe", float),
 )
 def ooc_cmd_create_fighter(client, name, hp, mana, atk, defe, spa, spd, spe):
     """
-    Allow you to create a fighter and to customize its stats.
+    Create a fighter and customize its base stats.
+
     Usage: /create_fighter FighterName HP MANA ATK DEF SPA SPD SPE
     """
-    if (
-        hp <= 0
-        or mana < 0
-        or atk < 0
-        or defe < 0
-        or spa < 0
-        or spd < 0
-        or spe < 0
-    ):
+    if hp <= 0 or any(stat < 0 for stat in (mana, atk, defe, spa, spd, spe)):
         client.send_ooc(
-            "mana, atk, def, spa, spd, spe have to be greater than or equal to zero\nhp has to be greater than zero\nUsage: /create_fighter FighterName HP MANA ATK DEF SPA SPD SPE"
+            "mana, atk, def, spa, spd, spe have to be greater than or equal to zero\n"
+            "hp has to be greater than zero\n"
+            "Usage: /create_fighter FighterName HP MANA ATK DEF SPA SPD SPE"
         )
         return
 
-    fighter_list = os.listdir("storage/battlesystem")
+    FIGHTER_STORAGE.mkdir(parents=True, exist_ok=True)
 
-    if len(fighter_list) >= 1000:
+    fighter_files = tuple(FIGHTER_STORAGE.glob("*.yaml"))
+    if len(fighter_files) >= 1000:
         client.send_ooc(
             "Fighter storage is full! Please contact the server host to resolve this issue."
         )
         return
 
-    path = derelative(name.lower())
-    if f"{path}.yaml" in fighter_list:
+    fighter_name = derelative(name.strip().lower())
+    if not fighter_name:
+        client.send_ooc("Fighter name cannot be empty.")
+        return
+
+    if _fighter_exists(fighter_name):
         client.send_ooc("This fighter has already been created.")
         return
 
-    fighter = {}
-    fighter["HP"] = hp
-    fighter["MANA"] = mana
-    fighter["ATK"] = atk
-    fighter["DEF"] = defe
-    fighter["SPA"] = spa
-    fighter["SPD"] = spd
-    fighter["SPE"] = spe
-    fighter["Moves"] = []
+    fighter = {
+        "HP": hp,
+        "MANA": mana,
+        "ATK": atk,
+        "DEF": defe,
+        "SPA": spa,
+        "SPD": spd,
+        "SPE": spe,
+        "Moves": [],
+    }
 
-    with open(
-        f"storage/battlesystem/{path}.yaml",
-        "w",
-        encoding="utf-8",
-    ) as c_save:
-        yaml.dump(fighter, c_save)
-        client.send_ooc(f"{path} has been created!")
+    _save_fighter(fighter_name, fighter)
+    client.send_ooc(f"{fighter_name} has been created!")
 
 
 @command(
@@ -204,107 +468,118 @@ def ooc_cmd_create_fighter(client, name, hp, mana, atk, defe, spa, spd, spe):
 )
 def ooc_cmd_create_move(client, name, cost, type, power, accuracy, effects):
     """
-    Allow you to create a move for a fighter.
-    You have to choose a fighter first!
-    MovesType: Atk or Spa
+    Add a move to the currently selected fighter.
+
     Usage: /create_move MoveName ManaCost MovesType Power Accuracy Effects
     """
-    if client.battle is None:
+    if not _battle_fighter_exists(client):
         client.send_ooc(
-            "You have to choose a figher to create a move.\n /choose_fighter FighterName"
+            "You have to choose a fighter to create a move.\n"
+            "/choose_fighter FighterName"
         )
         return
 
     if cost < 0:
         client.send_ooc(
-            "ManaCost has to be greater than or equal to zero.\nUsage: /create_move MoveName ManaCost MovesType Power Accuracy Effects"
+            "ManaCost has to be greater than or equal to zero.\n"
+            "Usage: /create_move MoveName ManaCost MovesType Power Accuracy Effects"
         )
         return
 
     if power < 0:
         client.send_ooc(
-            "Power has to be greater than or equal to zero.\nUsage: /create_move MoveName ManaCost MovesType Power Accuracy Effects"
+            "Power has to be greater than or equal to zero.\n"
+            "Usage: /create_move MoveName ManaCost MovesType Power Accuracy Effects"
         )
         return
 
-    if accuracy <= 0 or accuracy > 100:
+    if not 0 < accuracy <= 100:
         client.send_ooc(
-            "Accuracy should be a integer between 1 and 100\nUsage: /create_move MoveName ManaCost MovesType Power Accuracy Effects"
+            "Accuracy must be a number between 1 and 100.\n"
+            "Usage: /create_move MoveName ManaCost MovesType Power Accuracy Effects"
         )
         return
 
-    with open(
-        f"storage/battlesystem/{client.battle.fighter}.yaml", "r", encoding="utf-8"
-    ) as c_load:
-        char = yaml.safe_load(c_load)
+    fighter_name = client.battle.fighter
+    char = _load_fighter(fighter_name)
 
-        move_list = []
-        for i in range(0, len(char["Moves"])):
-            move_list.append(char["Moves"][i]["Name"])
+    moves = char.setdefault("Moves", [])
+    move_names = {current_move.get("Name", "").lower() for current_move in moves}
 
-        if name.lower() in move_list:
-            client.send_ooc("This move has already been created.")
-            return
+    move_name = name.strip().lower()
+    if not move_name:
+        client.send_ooc("Move name cannot be empty.")
+        return
 
-        char["Moves"].append({})
-        index = len(char["Moves"]) - 1
-        char["Moves"][index]["Name"] = name.lower()
-        char["Moves"][index]["ManaCost"] = cost
-        char["Moves"][index]["MovesType"] = type.lower()
-        char["Moves"][index]["Power"] = power
-        char["Moves"][index]["Accuracy"] = accuracy
-        char["Moves"][index]["Effects"] = []
-        for effect in effects:
-            if effect.lower() in battle_effects:
-                char["Moves"][index]["Effects"].append(effect.lower())
-        with open(
-            f"storage/battlesystem/{client.battle.fighter}.yaml",
-            "w",
-            encoding="utf-8",
-        ) as c_save:
-            yaml.dump(char, c_save)
+    if move_name in move_names:
+        client.send_ooc("This move has already been created.")
+        return
 
-        client.send_ooc(f"{name} has been added!")
-        client.battle = ClientManager.BattleChar(client, client.battle.fighter, char)
-        guild = None
-        for g in client.area.battle_guilds:
-            if client in client.area.battle_guilds[g]:
-                guild = g
+    valid_effects = []
+    unknown_effects = []
 
-        client.battle.guild = guild
+    for effect in effects:
+        normalized_effect = effect.lower()
+        if normalized_effect in BATTLE_EFFECTS:
+            valid_effects.append(normalized_effect)
+        else:
+            unknown_effects.append(effect)
+
+    moves.append(
+        {
+            "Name": move_name,
+            "ManaCost": cost,
+            "MovesType": type.lower(),
+            "Power": power,
+            "Accuracy": accuracy,
+            "Effects": valid_effects,
+        }
+    )
+
+    _save_fighter(fighter_name, char)
+
+    client.send_ooc(f"{move_name} has been added!")
+
+    if unknown_effects:
+        client.send_ooc(
+            "Note: these effects were not recognized and were ignored: "
+            + ", ".join(unknown_effects)
+        )
+
+    reload_fighter(client, char)
 
 
 @mod_only(hub_owners=True)
 @command(
     Arg("name", help="fighter name"),
-    Arg("stat", choices=["hp", "mana", "atk", "def", "spa", "spd", "spe"]),
+    Arg("stat", choices=STAT_NAMES),
     Arg("value", float),
 )
 def ooc_cmd_modify_stat(client, name, stat, value):
     """
-    Allow you to modify fighter's stats.
-    Usage: /modify_stat FighterName Stat Value
+    Modify one of a fighter's base stats.
+    
+    Usage: /modify_stat <FighterName> <hp|mana|atk|defe|spa|spd|spe> <Value>
     """
-    path = derelative(name.lower())
-    if f"{path}.yaml" not in os.listdir("storage/battlesystem"):
+    fighter_name = derelative(name.strip().lower())
+
+    if not _fighter_exists(fighter_name):
         client.send_ooc("No fighter has this name!")
         return
 
     if value < 0:
-        client.send_ooc("The value have to be a number greater than or equal to zero")
+        client.send_ooc(
+            "The value has to be a number greater than or equal to zero."
+        )
         return
 
-    with open(
-        f"storage/battlesystem/{path}.yaml", "r", encoding="utf-8"
-    ) as c_load:
-        char = yaml.safe_load(c_load)
-        char[stat.upper()] = value
-        with open(
-            f"storage/battlesystem/{path}.yaml", "w", encoding="utf-8"
-        ) as c_save:
-            yaml.dump(char, c_save)
+    char = _load_fighter(fighter_name)
+    char[STAT_STORAGE_KEYS[stat]] = value
+    _save_fighter(fighter_name, char)
+
     client.send_ooc(
-        f"{path}'s {stat} has been modified. To check the changes choose again this fighter"
+        f"{fighter_name}'s {stat} has been modified. "
+        "Choose this fighter again to check the changes."
     )
 
 
@@ -312,11 +587,15 @@ def ooc_cmd_modify_stat(client, name, stat, value):
 @command(Arg("arg", rest=True, default="", help="fighter name"))
 def ooc_cmd_delete_fighter(client, arg):
     """
-    Allow you to delete a fighter.
-    Usage: /delete_move FighterName
+    Delete a fighter YAML definition.
+    
+    Usage: /delete_fighter <FighterName>
     """
-    if f"{arg.lower()}.yaml" in os.listdir("storage/battlesystem"):
-        os.remove(f"storage/battlesystem/{arg.lower()}.yaml")
+    fighter_name = derelative(arg.strip().lower())
+    path = FIGHTER_STORAGE / f"{fighter_name}.yaml"
+
+    if path.is_file():
+        path.unlink()
         client.send_ooc(f"{arg} has been deleted!")
     else:
         client.send_ooc(f"{arg} is not found in the fighter server list.")
@@ -326,45 +605,33 @@ def ooc_cmd_delete_fighter(client, arg):
 @command(Arg("arg", rest=True, default="", help="move name"))
 def ooc_cmd_delete_move(client, arg):
     """
-    Delete a move from a fighter.
-    You have to choose a fighter first!
-    Usage: /delete_move MoveName
+    Delete a move from the currently selected fighter.
+    
+    Usage: /delete_move <MoveName>
     """
-    
-    if client.battle is None:
-        client.send_ooc("You have to choose the fighter first")
+    if not _battle_fighter_exists(client):
+        client.send_ooc("You have to choose the fighter first.")
         return
-    
-    with open(
-        f"storage/battlesystem/{client.battle.fighter}.yaml", "r", encoding="utf-8"
-    ) as c_load:
-        char = yaml.safe_load(c_load)
-        move_list = []
-        for i in range(0, len(char["Moves"])):
-            move_list.append(char["Moves"][i]["Name"])
-        if arg.lower() in move_list:
-            index = move_list.index(arg.lower())
-            char["Moves"].pop(index)
-            with open(
-                f"storage/battlesystem/{client.battle.fighter}.yaml",
-                "w",
-                encoding="utf-8",
-            ) as c_save:
-                yaml.dump(char, c_save)
 
-            client.battle = ClientManager.BattleChar(
-                client, client.battle.fighter, char
-            )
-            guild = None
-            for g in client.area.battle_guilds:
-                if client in client.area.battle_guilds[g]:
-                    guild = g
+    fighter_name = client.battle.fighter
+    char = _load_fighter(fighter_name)
+    moves = char.setdefault("Moves", [])
+    move_name = arg.strip().lower()
 
-            client.battle.guild = guild
+    for index, current_move in enumerate(moves):
+        if current_move.get("Name", "").lower() == move_name:
+            moves.pop(index)
+            _save_fighter(fighter_name, char)
+            reload_fighter(client, char)
             client.send_ooc(f"{arg} has been deleted!")
-        else:
-            client.send_ooc(f"{arg} is not found in the fighter moves")
+            return
 
+    client.send_ooc(f"{arg} is not found in the fighter moves.")
+
+
+# ---------------------------------------------------------------------------
+# Battle configuration
+# ---------------------------------------------------------------------------
 
 @mod_only(hub_owners=True)
 @command(
@@ -372,96 +639,155 @@ def ooc_cmd_delete_move(client, arg):
     Arg("value", default="", help="new value"),
 )
 def ooc_cmd_battle_config(client, parameter, value):
-   """
-   Allow you to customize some battle settings.
-   Usage: /custom_battle <parameter> <value>
-   """
-   if parameter == "":
-       client.send_ooc(
-           "paralysis_rate, critical_rate, critical_bonus, bonus_malus, poison_damage, show_hp, min_multishot, max_multishot, burn_damage, freeze_damage, confusion_rate, enraged_bonus, stolen_stat"
-       )
-       return
-   if parameter.lower() == "paralysis_rate":
-       client.area.battle_paralysis_rate = int(value)
-   elif parameter.lower() == "critical_rate":
-       client.area.battle_critical_rate = int(value)
-   elif parameter.lower() == "critical_bonus":
-       client.area.battle_critical_bonus = float(value)
-   elif parameter.lower() == "bonus_malus":
-       client.area.battle_bonus_malus = float(value)
-   elif parameter.lower() == "poison_damage":
-       client.area.battle_poison_damage = float(value)
-   elif parameter.lower() == "min_multishot":
-       client.area.battle_min_multishot = int(value)
-   elif parameter.lower() == "max_multishot":
-       client.area.battle_max_multishot = int(value)
-   elif parameter.lower() == "burn_damage":
-       client.area.battle_burn_damage = float(value)
-   elif parameter.lower() == "freeze_damage":
-       client.area.battle_freeze_damage = float(value)
-   elif parameter.lower() == "confusion_rate":
-       client.area.battle_confusion_rate = int(value)
-   elif parameter.lower() == "enraged_bonus":
-       client.area.battle_enraged_bonus = float(value)
-   elif parameter.lower() == "stolen_stat":
-       client.area.battle_stolen_stat = float(value)
-   elif parameter.lower() == "show_hp" and value.lower() in ["true", "false"]:
-       client.area.battle_show_hp = value.lower() == "true"
-   else:
-       client.send_ooc("value is not valid")
-       return
-   client.send_ooc(f"{parameter.lower()} has been changed to {value}")
+    """
+    Customize battle settings for the current area.
+
+    Usage: /battle_config <parameter> <value>
+    """
+    if not parameter:
+        client.send_ooc(", ".join(BATTLE_CONFIG_NAMES))
+        return
+
+    parameter = parameter.lower()
+
+    if parameter == "show_hp":
+        normalized_value = value.lower()
+        if normalized_value not in {"true", "false"}:
+            client.send_ooc("value must be true or false")
+            return
+
+        client.area.battle_show_hp = normalized_value == "true"
+        client.send_ooc(f"{parameter} has been changed to {normalized_value}")
+        return
+
+    if parameter in BATTLE_CONFIG_POSITIVE_INTS:
+        try:
+            parsed_value = int(value)
+        except ValueError:
+            client.send_ooc("value must be a whole number")
+            return
+
+        if parsed_value <= 0:
+            client.send_ooc("value has to be greater than zero")
+            return
+
+        setattr(client.area, BATTLE_CONFIG_POSITIVE_INTS[parameter], parsed_value)
+
+    elif parameter in BATTLE_CONFIG_NON_NEGATIVE_INTS:
+        try:
+            parsed_value = int(value)
+        except ValueError:
+            client.send_ooc("value must be a whole number")
+            return
+
+        if parsed_value < 0:
+            client.send_ooc("value has to be greater than or equal to zero")
+            return
+
+        # Reject an invalid range instead of storing a configuration that
+        # would later make random.randint(min, max) crash.
+        min_multishot = (
+            parsed_value
+            if parameter == "min_multishot"
+            else client.area.battle_min_multishot
+        )
+        max_multishot = (
+            parsed_value
+            if parameter == "max_multishot"
+            else client.area.battle_max_multishot
+        )
+
+        if min_multishot > max_multishot:
+            client.send_ooc(
+                "min_multishot cannot be greater than max_multishot."
+            )
+            return
+
+        setattr(
+            client.area,
+            BATTLE_CONFIG_NON_NEGATIVE_INTS[parameter],
+            parsed_value,
+        )
+
+    elif parameter in BATTLE_CONFIG_FLOATS:
+        try:
+            parsed_value = float(value)
+        except ValueError:
+            client.send_ooc("value must be a number")
+            return
+
+        if parameter in POSITIVE_FLOAT_CONFIGS and parsed_value <= 0:
+            client.send_ooc("value has to be greater than zero")
+            return
+
+        if parsed_value < 0:
+            client.send_ooc("value cannot be negative")
+            return
+
+        setattr(client.area, BATTLE_CONFIG_FLOATS[parameter], parsed_value)
+
+    else:
+        client.send_ooc("value is not valid")
+        return
+
+    client.send_ooc(f"{parameter} has been changed to {value}")
+
+
+# ---------------------------------------------------------------------------
+# Battle information and lobby
+# ---------------------------------------------------------------------------
+
+def _fighter_battle_line(area, fighter):
+    """Return one formatted fighter line for /battle_info."""
+    emoji = "🔎" if fighter.battle.selected_move == -1 else "⚔️"
+
+    show_hp = ""
+    if area.battle_show_hp and fighter.battle.maxhp:
+        hp_percentage = round(fighter.battle.hp * 100 / fighter.battle.maxhp, 2)
+        show_hp = f": {hp_percentage}%"
+
+    return (
+        f"{emoji} [{fighter.id}]{fighter.battle.fighter} "
+        f"({fighter.showname}){show_hp} {emoji}"
+    )
 
 
 def send_battle_info(client):
-    """
-    Prepare the message about battle info
-    """
-    msg = "\n⚔️🛡️ Battle Fighters Info 🛡️⚔️:\n"
-    for guild in client.area.battle_guilds:
-        msg += f"\n⛩{guild} GUILD⛩:\n"
-        for client in client.area.battle_guilds[guild]:
-            if client not in client.area.fighters:
-                continue
+    """Build and return the formatted state of all fighters in the battle."""
+    area = client.area
+    lines = ["\n⚔️🛡️ Battle Fighters Info 🛡️⚔️:"]
 
-            if client.battle.selected_move == -1:
-                emoji = "🔎"
-            else:
-                emoji = "⚔️"
+    for guild, members in area.battle_guilds.items():
+        lines.extend([f"\n⛩{guild} GUILD⛩:"])
 
-            if client.area.battle_show_hp:
-                show_hp = f": {round(client.battle.hp*100/client.battle.maxhp,2)}%"
-            else:
-                show_hp = ""
+        for fighter in members:
+            if fighter in area.fighters:
+                lines.append(_fighter_battle_line(area, fighter))
 
-            msg += f"{emoji} [{client.id}]{client.battle.fighter} ({client.showname}){show_hp} {emoji}\n"
-        msg += "\n"
+        lines.append("")
 
-    for client in client.area.fighters:
-        if client.battle.guild is None:
-            if client.battle.selected_move == -1:
-                emoji = "🔎"
-            else:
-                emoji = "⚔️"
+    guilded_fighter_ids = {
+        id(fighter)
+        for members in area.battle_guilds.values()
+        for fighter in members
+    }
 
-            if client.area.battle_show_hp:
-                show_hp = f": {round(client.battle.hp*100/client.battle.maxhp,2)}%"
-            else:
-                show_hp = ""
+    for fighter in area.fighters:
+        if id(fighter) not in guilded_fighter_ids:
+            lines.append(_fighter_battle_line(area, fighter))
 
-            msg += f"{emoji} [{client.id}]{client.battle.fighter} ({client.showname}){show_hp} {emoji}\n"
-    return msg
+    return "\n".join(lines)
 
 
 @command()
 def ooc_cmd_battle_info(client):
     """
-    Send you info about the battle.
+    Send information about the current battle.
+
     Usage: /battle_info
     """
     if client in client.area.fighters:
-        msg = send_battle_info(client)
-        client.send_ooc(msg)
+        client.send_ooc(send_battle_info(client))
     else:
         client.send_ooc("You are not fighting!")
 
@@ -469,61 +795,80 @@ def ooc_cmd_battle_info(client):
 @command()
 def ooc_cmd_fight(client):
     """
-    Allow you to join the battle or rejoin if you disconnected!
+    Join the battle or reconnect to an existing fighter slot.
+
     Usage: /fight
     """
-    if len(client.area.fighters) > 0 and client.area.battle_started:
-        free_fighters = {
-            c.battle.fighter: c
-            for c in client.area.fighters
-            if c.battle.current_client is not None
+    area = client.area
+
+    # Reconnection path.
+    if area.fighters and area.battle_started:
+        fighter_by_name = {
+            fighter.battle.fighter: fighter
+            for fighter in area.fighters
+            if fighter.battle.current_client is not None
         }
-        if client in client.area.fighters:
-            index = client.area.fighters.index(client)
-            client.battle = client.area.fighters[index].battle
+
+        if client in area.fighters:
+            index = area.fighters.index(client)
+            client.battle = area.fighters[index].battle
             client.battle.current_client = client
             return
-        if len(free_fighters) > 0:
-            fighter, target = random.choice(list(free_fighters.items()))
-            if client.battle is not None and client.battle.fighter in free_fighters:
-                client.battle = free_fighters[client.battle.fighter].battle
+
+        if fighter_by_name:
+            if client.battle is not None and client.battle.fighter in fighter_by_name:
+                # Reconnect to the exact fighter slot already associated with this client.
+                target = fighter_by_name[client.battle.fighter]
             else:
-                client.battle = target.battle
+                _, target = random.choice(list(fighter_by_name.items()))
 
+            client.battle = target.battle
             client.battle.current_client = client
+
             if client.battle.guild is not None:
-                index = client.area.battle_guilds[client.battle.guild].index(target)
-                client.area.battle_guilds[client.battle.guild][index] = client
-            client.area.fighters.remove(target)
-            client.area.fighters.append(client)
-            msg = send_battle_info(client)
+                members = area.battle_guilds[client.battle.guild]
+                index = members.index(target)
+                members[index] = client
+
+            area.fighters.remove(target)
+            area.fighters.append(client)
+
+            message = send_battle_info(client)
             battle_send_ic(
-                client, msg=f"~{client.battle.fighter}~ is ready to fight (reconnected)"
+                client,
+                msg=f"~{client.battle.fighter}~ is ready to fight (reconnected)",
             )
-            for client in client.area.fighters:
-                client.send_ooc(msg)
+
+            for fighter in area.fighters:
+                fighter.send_ooc(message)
+
             return
 
-    if not client.area.can_battle:
+    if not area.can_battle:
         client.send_ooc("You cannot fight in this area!")
         return
+
     if client.battle is None:
         client.send_ooc("You have to choose a fighter to start a battle!")
         return
-    if client in client.area.fighters:
+
+    if client in area.fighters:
         client.send_ooc("You are already in battle!")
         return
-    if client.area.battle_started:
+
+    if area.battle_started:
         client.send_ooc("The battle is already started!")
         return
-    client.area.fighters.append(client)
-    msg = send_battle_info(client)
-    for client in client.area.fighters:
-        client.send_ooc(msg)
-    client.area.broadcast_ooc(
+
+    area.fighters.append(client)
+
+    message = send_battle_info(client)
+    for fighter in area.fighters:
+        fighter.send_ooc(message)
+
+    area.broadcast_ooc(
         f"⚔️{client.battle.fighter} ({client.showname}) is ready to fight!⚔️"
     )
-    fighter_name = client.area.area_manager.char_list[client.char_id]
     battle_send_ic(client, msg=f"~{client.battle.fighter}~ is ready to fight")
 
 
@@ -531,52 +876,57 @@ def ooc_cmd_fight(client):
 @command()
 def ooc_cmd_refresh_battle(client):
     """
-    Refresh the battle
+    Reset the current battle and return to the lobby.
+    
     Usage: /refresh_battle
     """
-    for c in client.area.fighters:
-        c.battle.selected_move = -1
-        c.target = None
-    client.area.fighters = []
-    client.area.battle_started = False
+    area = client.area
+
+    # Restore every fighter from YAML so temporary battle changes such as
+    # buffs, debuffs, mana consumption and statuses do not leak into the next
+    # battle after an admin refresh.
+    for fighter in area.fighters:
+        fighter.battle.selected_move = -1
+        fighter.battle.target = None
+        reload_fighter(fighter)
+
+    area.fighters = []
+    area.num_selected_move = 0
+    area.battle_started = False
+
     client.send_ooc("The battle has been refreshed!")
 
 
 @command()
 def ooc_cmd_surrender(client):
     """
-    A command to surrend from the current battle.
+    Surrender from the current battle.
+    
     Usage: /surrender
     """
-    if client in client.area.fighters:
-        if client.battle.selected_move == -1:
-            client.area.fighters.remove(client)
-        else:
-            client.battle.hp = 0
-            client.battle.selected_move = -1
-            client.battle.target = None
-        battle_send_ic(
-            client, msg=f"~{client.battle.fighter}~ decides to surrend", offset=100
-        )
-        with open(
-            f"storage/battlesystem/{client.battle.fighter}.yaml",
-            "r",
-            encoding="utf-8",
-        ) as c_load:
-            char = yaml.safe_load(c_load)
-            client.battle = ClientManager.BattleChar(
-                client, client.battle.fighter, char
-            )
-        guild = None
-        for g in client.area.battle_guilds:
-            if client in client.area.battle_guilds[g]:
-                guild = g
+    area = client.area
 
-        client.battle.guild = guild
-        if len(client.area.fighters) == 0:
-            client.area.battle_started = False
+    if client not in area.fighters:
+        client.send_ooc("You are not fighting at the moment!")
+        return
+
+    if client.battle.selected_move == -1:
+        area.fighters.remove(client)
     else:
-        client.send_ooc("You are not fighting in this moment!")
+        client.battle.hp = 0
+        client.battle.selected_move = -1
+        client.battle.target = None
+
+    battle_send_ic(
+        client,
+        msg=f"~{client.battle.fighter}~ decides to surrender",
+        offset=100,
+    )
+
+    reload_fighter(client)
+
+    if not area.fighters:
+        area.battle_started = False
 
 
 @mod_only(hub_owners=True)
@@ -584,52 +934,51 @@ def ooc_cmd_surrender(client):
 def ooc_cmd_remove_fighter(client, id):
     """
     Force a fighter to leave the battle.
-    Usage: /remove_fighter Target_ID
+    
+    Usage: /remove_fighter <Target_ID>
     """
-    fighter_ids = {c.id: c for c in client.area.fighters}
-    if id in fighter_ids:
-        target = fighter_ids[id]
-        if target.battle.selected_move == -1:
-            client.area.fighters.remove(target)
-        else:
-            target.battle.hp = 0
-            target.battle.selected_move = -1
-            target.battle.target = None
-        battle_send_ic(
-            client,
-            msg=f"~{target.battle.fighter}~ ran out of hp! (forced to leave the battle)",
-            offset=100,
-        )
-        with open(
-            f"storage/battlesystem/{target.battle.fighter}.yaml",
-            "r",
-            encoding="utf-8",
-        ) as c_load:
-            char = yaml.safe_load(c_load)
-            target.battle = ClientManager.BattleChar(
-                target, target.battle.fighter, char
-            )
-        guild = None
-        for g in target.area.battle_guilds:
-            if target in target.area.battle_guilds[g]:
-                guild = g
+    area = client.area
+    fighter_ids = _get_fighter_ids(area)
 
-        target.battle.guild = guild
-        if len(client.area.fighters) == 0:
-            client.area.battle_started = False
-    else:
+    if id not in fighter_ids:
         client.send_ooc("Target not found!")
+        return
 
+    target = fighter_ids[id]
+
+    if target.battle.selected_move == -1:
+        area.fighters.remove(target)
+    else:
+        target.battle.hp = 0
+        target.battle.selected_move = -1
+        target.battle.target = None
+
+    battle_send_ic(
+        client,
+        msg=f"~{target.battle.fighter}~ ran out of hp! (forced to leave the battle)",
+        offset=100,
+    )
+    reload_fighter(target)
+
+    if not area.fighters:
+        area.battle_started = False
+
+
+# ---------------------------------------------------------------------------
+# Turn selection
+# ---------------------------------------------------------------------------
 
 @mod_only(hub_owners=True)
 @command(Arg("id", int, help="target client ID"))
 def ooc_cmd_force_skip_move(client, id):
     """
-    Force a fighter to skip the turn
-    Usage: /force_skip_move Target_ID
+    Force a fighter to skip the current turn.
+    
+    Usage: /force_skip_move <Target_ID>
     """
+    area = client.area
+    fighter_ids = _get_fighter_ids(area)
 
-    fighter_ids = {c.id: c for c in client.area.fighters}
     if id not in fighter_ids:
         client.send_ooc("The target is not in the fighter list")
         return
@@ -637,143 +986,166 @@ def ooc_cmd_force_skip_move(client, id):
     target = fighter_ids[id]
 
     if target.battle.selected_move == -1:
-        target.area.num_selected_move += 1
+        area.num_selected_move += 1
 
     target.battle.selected_move = -2
-    target.send_ooc("You have been forced to skip the turn")
-    client.send_ooc(f"{target.battle.fighter} has been forced to skip the turn")
-    client.area.broadcast_ooc(f"{target.battle.fighter} has choosen a move")
 
-    if client.area.num_selected_move == len(client.area.fighters):
-        client.area.fighters = start_battle_animation(client.area)
-        client.area.num_selected_move = 0
-        if not client.area.battle_started:
-            client.area.battle_started = True
-        if len(client.area.fighters) == 0:
-            client.area.battle_started = False
+    target.send_ooc("You have been forced to skip the turn")
+    client.send_ooc(f"{target.battle.fighter} has chosen to skip the turn")
+    area.broadcast_ooc(f"{target.battle.fighter} has chosen a move")
+
+    _finish_turn_if_ready(area)
 
 
 @command()
 def ooc_cmd_skip_move(client):
     """
-    Allow you to skip the turn
+    Skip the current turn.
+    
     Usage: /skip_move
     """
-    if client not in client.area.fighters:
+    area = client.area
+
+    if client not in area.fighters:
         client.send_ooc("You cannot skip the turn if you are not in the fight!")
         return
+
     if client.battle.selected_move != -1:
         client.send_ooc("You already selected a move!")
         return
 
     client.battle.selected_move = -2
-    client.area.num_selected_move += 1
-    client.send_ooc(f"You have choosen to skip the turn")
-    client.area.broadcast_ooc(f"{client.battle.fighter} has choosen a move")
+    area.num_selected_move += 1
 
-    if client.area.num_selected_move == len(client.area.fighters):
-        client.area.fighters = start_battle_animation(client.area)
-        client.area.num_selected_move = 0
-        if not client.area.battle_started:
-            client.area.battle_started = True
-        if len(client.area.fighters) == 0:
-            client.area.battle_started = False
+    client.send_ooc("You have chosen to skip the turn")
+    area.broadcast_ooc(f"{client.battle.fighter} has chosen a move")
 
+    _finish_turn_if_ready(area)
+
+
+# ---------------------------------------------------------------------------
+# Guild commands
+# ---------------------------------------------------------------------------
 
 @mod_only(hub_owners=True)
 @command(Arg("arg", rest=True, default="", help="guild name (blank closes all)"))
 def ooc_cmd_close_guild(client, arg):
     """
-    Allow GM to close all guilds if arg is "", or to close a specific guild is arg is GuildName
+    Close all guilds, or one specific guild.
+
     Usage: /close_guild <GuildName>
     """
-    if arg == "":
-        for guild in client.area.battle_guilds:
-            for c in client.area.battle_guilds[guild]:
-                c.battle.guild = None
-        client.area.battle_guilds = {}
-        client.area.broadcast_ooc("All guilds have been closed!")
-    elif arg in client.area.battle_guilds:
-        for c in client.area.battle_guilds[arg]:
-            c.send_ooc(f"'{arg}' Guild has been closed")
-        client.area.battle_guilds.pop(arg)
-    else:
+    area = client.area
+    guild_name = arg.strip()
+
+    if not guild_name:
+        for members in area.battle_guilds.values():
+            for member in members:
+                if member.battle is not None:
+                    member.battle.guild = None
+
+        area.battle_guilds.clear()
+        area.broadcast_ooc("All guilds have been closed!")
+        return
+
+    members = area.battle_guilds.get(guild_name)
+    if members is None:
         client.send_ooc("Guild not found!")
+        return
+
+    # Clear the BattleChar guild reference too; otherwise members would keep
+    # a stale guild name after the dictionary entry was removed.
+    for member in members:
+        member.send_ooc(f"'{guild_name}' Guild has been closed")
+        if member.battle is not None:
+            member.battle.guild = None
+
+    area.battle_guilds.pop(guild_name, None)
 
 
 @command()
 def ooc_cmd_battle_effects(client):
     """
-    Show all available battle effects
+    Show all available battle effects.
+
     Usage: /battle_effects
     """
-    msg = "Available Battle Effects:\n"
-    for effect in battle_effects:
-        msg += f"- {effect}\n"
-    client.send_ooc(msg)
+    lines = ["Available Battle Effects:"]
+    lines.extend(f"- {effect}" for effect in BATTLE_EFFECTS)
+    client.send_ooc("\n".join(lines))
 
 
 @command(
-    Arg("id", int, default=None, help="target client ID (blank leaves yourself)"),
+    Arg("id", int, default=None, help="target client ID (blank leaves yourself"),
 )
 def ooc_cmd_leave_guild(client, id):
     """
-    Allow you to leave your current guid
+    Leave the current guild, or remove another member when authorized.
+
     Usage: /leave_guild <Target_ID>
     """
+    area = client.area
+
     if id is None:
-        if client.battle.guild is None:
+        if client.battle is None or client.battle.guild is None:
             client.send_ooc("You are not in any guilds!")
             return
 
+        _remove_from_guild(client, notify=True)
+        return
+
+    # Area owners can remove any client from a guild.
+    if client in area.area_manager.owners:
+        area_ids = {fighter.id: fighter for fighter in area.clients}
+
+        if id not in area_ids:
+            client.send_ooc("Target not found!")
+            return
+
+        target = area_ids[id]
+        if target.battle is None or target.battle.guild is None:
+            client.send_ooc("Target has no fighter or is not in a guild!")
+            return
+
+        guild = target.battle.guild
+        _remove_from_guild(target)
+
+        client.send_ooc(f"Target has been removed from '{guild}' Guild")
+        target.send_ooc(f"You have been removed from '{guild}' Guild")
+        return
+
+    # Guild leader can remove another guild member.
+    if (
+        client.battle is not None
+        and client.battle.guild is not None
+        and client == client.area.battle_guilds[client.battle.guild][0]
+    ):
         guild = client.battle.guild
-        client.area.battle_guilds[guild].remove(client)
-        client.send_ooc("You have been removed from the current guild")
-        if client.area.battle_guilds[guild] == []:
-            client.area.battle_guild.pop(guild)
-        client.battle.guild = None
-    else:
-        if client in client.area.area_manager.owners:
-            area_ids = {c.id: c for c in client.area.clients}
-            if id in area_ids:
-                target = area_ids[id]
-                if target.battle is None or target.battle.guild is None:
-                    client.send_ooc("Target has not a fighter or is not in a guild!")
-                    return
-                guild = target.battle.guild
-                client.area.battle_guilds[guild].remove(target)
-                if len(client.area.battle_guilds[guild]) == 0:
-                    client.area.battle_guilds.pop(guild)
-                target.battle.guild = None
-                client.send_ooc(f"Target has been removed from '{guild}' Guild")
-                target.send_ooc(f"You have been removed from '{guild}' Guild")
-            else:
-                client.send_ooc("Target not found!")
-        elif client == client.area.battle_guilds[client.battle.guild][0]:
-            guild_ids = {
-                c.id: c for c in client.area.battle_guilds[client.battle.guild]
-            }
-            if id in guild_ids:
-                target = guild_ids[id]
-                guild = target.battle.guild
-                client.area.battle_guilds[guild].remove(target)
-                if len(client.area.battle_guilds[guild]) == 0:
-                    client.area.battle_guilds.pop(guild)
-                target.battle.guild = None
-                client.send_ooc(f"Target has been removed from '{guild}' Guild")
-                target.send_ooc(f"You have been removed from '{guild}' Guild")
-            else:
-                client.send_ooc("Target not found!")
-        else:
-            client.send_ooc("You are not a GM or a Guild Leader")
+        guild_ids = {fighter.id: fighter for fighter in area.battle_guilds[guild]}
+
+        if id not in guild_ids:
+            client.send_ooc("Target not found!")
+            return
+
+        target = guild_ids[id]
+        _remove_from_guild(target)
+
+        client.send_ooc(f"Target has been removed from '{guild}' Guild")
+        target.send_ooc(f"You have been removed from '{guild}' Guild")
+        return
+
+    client.send_ooc("You are not a GM or a Guild Leader")
 
 
 @command(Arg("id", int, help="target client ID"))
 def ooc_cmd_join_guild(client, id):
     """
-    Allow the guild leader to let a fighter to join the guild
+    Invite another fighter to the guild you lead.
+    
     Usage: /join_guild <Target_ID>
     """
+    area = client.area
+
     if client.battle is None:
         client.send_ooc("You have to choose a fighter first!")
         return
@@ -783,14 +1155,15 @@ def ooc_cmd_join_guild(client, id):
         return
 
     guild = client.battle.guild
+    members = area.battle_guilds[guild]
 
-    if client != client.area.battle_guilds[guild][0]:
+    if client != members[0]:
         client.send_ooc(
-            "You are not the guild leader, you cannot choose who can join to the guild."
+            "You are not the guild leader; you cannot choose who joins the guild."
         )
         return
 
-    area_ids = {c.id: c for c in client.area.clients}
+    area_ids = {fighter.id: fighter for fighter in area.clients}
 
     if id not in area_ids:
         client.send_ooc("Target not found!")
@@ -799,50 +1172,54 @@ def ooc_cmd_join_guild(client, id):
     target = area_ids[id]
 
     if target.battle is None:
-        client.send_ooc(f"{client.showname} has to choose a fighter first!")
+        client.send_ooc(f"{target.showname} has to choose a fighter first!")
         return
 
     if target.battle.guild is not None:
-        client.send_ooc(f"{client.battle.fighter} is already in a guild!")
+        client.send_ooc(f"{target.battle.fighter} is already in a guild!")
         return
 
-    if target in client.area.battle_guilds[guild]:
-        client.send_ooc(f"{client.battle.fighter} is already in this guild!")
-        return
+    _add_to_guild(target, guild)
 
-    client.area.battle_guilds[guild].append(target)
-    target.battle.guild = guild
-    client.send_ooc(f"{target.battle.fighter} joined to the {guild} Guild!")
-    target.send_ooc(f"You joined to the {guild} Guild!")
-    for client in client.area.battle_guilds[guild]:
-        send_info_guild(client)
+    client.send_ooc(f"{target.battle.fighter} joined the {guild} Guild!")
+    target.send_ooc(f"You joined the {guild} Guild!")
+
+    for member in members:
+        send_info_guild(member)
 
 
 @command(Arg("arg", rest=True, default="", help="guild name"))
 def ooc_cmd_create_guild(client, arg):
     """
-    Allow you to create a guild
-    Usage: /create_guild <NameGuild>
+    Create a guild and become its leader.
+
+    Usage: /create_guild <GuildName>
     """
     if client.battle is None:
         client.send_ooc("You have to choose a fighter first!")
         return
 
-    if arg in client.area.battle_guilds:
+    guild = arg.strip()
+    if not guild:
+        client.send_ooc("Guild name cannot be empty.")
+        return
+
+    if guild in client.area.battle_guilds:
         client.send_ooc("There is already a guild with this name!")
         return
 
-    client.area.battle_guilds[arg] = []
-    client.area.battle_guilds[arg].append(client)
-    client.battle.guild = arg
-    client.send_ooc(f"{arg} Guild has been created!")
+    client.area.battle_guilds[guild] = [client]
+    client.battle.guild = guild
+
+    client.send_ooc(f"{guild} Guild has been created!")
     send_info_guild(client)
 
 
 @command()
 def ooc_cmd_info_guild(client):
     """
-    Send info about your guild
+    Send information about the current guild.
+    
     Usage: /info_guild
     """
     if client.battle is None:
@@ -857,21 +1234,61 @@ def ooc_cmd_info_guild(client):
 
 
 def send_info_guild(client):
+    """Build and send information about the client's current guild."""
     guild = client.battle.guild
+    members = client.area.battle_guilds[guild]
+    guild_leader = members[0]
 
-    guild_leader = client.area.battle_guilds[guild][0]
+    lines = [
+        f"\n⚔️🛡️{guild} GUILD🛡️⚔️:",
+        "",
+        (
+            "Guild Leader: "
+            f"⛩[{guild_leader.id}]{guild_leader.battle.fighter} "
+            f"({guild_leader.showname})⛩"
+        ),
+    ]
 
-    msg = f"\n⚔️🛡️{guild} GUILD🛡️⚔️:\n\nGuild Leader: ⛩[{guild_leader.id}]{guild_leader.battle.fighter} ({guild_leader.showname})⛩"
+    if len(members) > 1:
+        lines.extend(["", "👤Members👤:", ""])
 
-    if len(client.area.battle_guilds[guild]) > 1:
-        msg += "\n\n👤Members👤:\n\n"
-        for fighter in client.area.battle_guilds[guild]:
-            if fighter != guild_leader:
-                msg += (
-                    f"⚔️[{fighter.id}]{fighter.battle.fighter} ({fighter.showname})⚔️\n"
-                )
+        for member in members[1:]:
+            lines.append(
+                f"⚔️[{member.id}]{member.battle.fighter} "
+                f"({member.showname})⚔️"
+            )
 
-    client.send_ooc(msg)
+    client.send_ooc("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# Move selection
+# ---------------------------------------------------------------------------
+
+def _resolve_move(client, move_arg):
+    """
+    Resolve a move name or numeric move ID.
+
+    Returns ``(move_id, move)`` or ``(None, None)`` when invalid.
+    """
+    moves = client.battle.moves
+
+    if move_arg.isnumeric():
+        move_id = int(move_arg)
+        if move_id >= len(moves):
+            client.send_ooc("There is no move with that ID!")
+            return None, None
+        return move_id, moves[move_id]
+
+    normalized_name = move_arg.lower()
+    move_names = [current_move.name.lower() for current_move in moves]
+
+    if normalized_name not in move_names:
+        client.send_ooc("There is no move with this name!")
+        return None, None
+
+    move_id = move_names.index(normalized_name)
+    return move_id, moves[move_id]
 
 
 @command(
@@ -880,106 +1297,97 @@ def send_info_guild(client):
 )
 def ooc_cmd_use_move(client, move, target):
     """
-    This command will let you use a move during a battle!
-    AttAll moves don't need a target!
+    Select a move for the current battle turn.
+
+    AttAll moves do not need a target.
+
     Usage: /use_move MoveName/Move_ID Target_ID
     """
+    area = client.area
+
     if client.battle is None:
         client.send_ooc("You have to choose a fighter first!")
         return
-    if client not in client.area.fighters:
+
+    if client not in area.fighters:
         client.send_ooc("You are not ready to fight!")
         return
+
     if client.battle.selected_move != -1:
         client.send_ooc("You already selected a move!")
         return
+
     if client.battle.current_client is None:
         client.battle.current_client = client
 
-    if move.isnumeric():
-        if int(move) > len(client.battle.moves):
-            client.send_ooc("There is no move with that ID!")
-            return
+    move_id, selected_move = _resolve_move(client, move)
+    if selected_move is None:
+        return
 
-        move_id = int(move)
-        move = client.battle.moves[move_id].name
-    else:
-        moves_list = [move.name for move in client.battle.moves]
-
-        if move.lower() not in moves_list:
-            client.send_ooc("There is no move with this name!")
-            return
-
-        move_id = moves_list.index(move.lower())
-
-    if client.battle.moves[move_id].cost > client.battle.mana:
+    if selected_move.cost > client.battle.mana:
         client.send_ooc("You don't have enough mana to use this move!")
         return
 
+    # A move is only registered after every validation succeeds.
     if target is not None:
-        fighter_id_list = {c.id: c for c in client.area.fighters}
-        if target in fighter_id_list:
-            client.battle.target = fighter_id_list[target]
-            client.battle.selected_move = move_id
-            client.area.num_selected_move += 1
-            client.battle.mana += -client.battle.moves[move_id].cost
-            client.send_ooc(f"You have choosen {move.lower()}")
-            client.area.broadcast_ooc(f"{client.battle.fighter} has choosen a move")
-        else:
+        fighter_ids = _get_fighter_ids(area)
+
+        if target not in fighter_ids:
             client.send_ooc("Your target is not in the fighter list")
-    elif "atkall" in client.battle.moves[move_id].effect:
+            return
+
+        client.battle.target = fighter_ids[target]
+    elif "atkall" in selected_move.effect:
         client.battle.target = "all"
-        client.battle.selected_move = move_id
-        client.area.num_selected_move += 1
-        client.battle.mana += -client.battle.moves[move_id].cost
-        client.send_ooc(f"You have choosen {move.lower()}")
-        client.area.broadcast_ooc(f"{client.battle.fighter} has choosen a move")
     else:
         client.send_ooc("Not enough argument to attack")
-    if client.area.num_selected_move == len(client.area.fighters):
-        client.area.fighters = start_battle_animation(client.area)
-        client.area.num_selected_move = 0
-        if not client.area.battle_started:
-            client.area.battle_started = True
-        if len(client.area.fighters) == 0:
-            client.area.battle_started = False
+        return
 
+    client.battle.selected_move = move_id
+    client.battle.mana -= selected_move.cost
+
+    client.send_ooc(f"You have chosen {selected_move.name}")
+    area.broadcast_ooc(f"{client.battle.fighter} has chosen a move")
+
+    area.num_selected_move += 1
+    _finish_turn_if_ready(area)
+
+
+# ---------------------------------------------------------------------------
+# Battle presentation
+# ---------------------------------------------------------------------------
 
 def battle_send_ic(client, msg, effect="", shake=0, offset=0):
     """
-    A function used to send battle information in IC
-    effect: statdown, statup, poison, paralysis, lifeup, attack, specialattack
-    shake: screeenshake 0 = False, 1 = True
-    offset: 0 = alive, 100 = dead
-    Choosen_color = 3
+    Send a battle event to the current IC scene.
+
+    ``effect`` is the visual battle effect name.
+    ``shake`` enables a screenshake.
+    ``offset`` selects the alive/dead sprite offset.
     """
+    offset = 100 if offset else client.offset_pair
 
-    if offset != 0:
-        offset = 100
-    else:
-        offset = client.offset_pair
-
-    if effect == "":
-        sfx = ""
-    else:
+    if effect:
         sfx = f"sfx-{effect}"
+    else:
+        sfx = ""
+
+    other_offset = 0
+    other_emote = ""
+    other_flip = 0
+    other_folder = ""
 
     if client.charid_pair != -1:
-        client_ids = {c.char_id: c for c in client.area.clients}
-        if client.charid_pair in client_ids:
-            target = client_ids[client.charid_pair]
+        client_ids = {fighter.char_id: fighter for fighter in client.area.clients}
+        target = client_ids.get(client.charid_pair)
+
+        if target is None:
+            client.charid_pair = -1
+        else:
             other_offset = target.offset_pair
             other_emote = target.last_sprite
             other_flip = target.flip
             other_folder = target.claimed_folder
-        else:
-            client.charid_pair = -1
-
-    if client.charid_pair == -1:
-        other_offset = 0
-        other_emote = ""
-        other_flip = 0
-        other_folder = ""
 
     client.area.send_ic(
         pre=client.last_pre,
@@ -1001,627 +1409,623 @@ def battle_send_ic(client, msg, effect="", shake=0, offset=0):
     )
 
 
-def start_battle_animation(area):
-    # first of all we sort the fighters compared to their speed.
-    fighter_speed = {client: client.battle.spe for client in area.fighters}
-    sorted_fighter_speed = sorted(fighter_speed.items(), key=lambda x: x[1])
-    sorted_fighter_speed = dict(sorted_fighter_speed)
-    area.fighters = list(sorted_fighter_speed.keys())
+# ---------------------------------------------------------------------------
+# Battle engine helpers
+# ---------------------------------------------------------------------------
 
-    # Let all fighters do their moves
-    for client in area.fighters:
-        if client.battle.hp > 0:
-            # check if a fighter skipped the turn
-            if client.battle.selected_move == -2:
-                battle_send_ic(
-                    client, msg=f"~{client.battle.fighter}~ decides to skip the turn"
-                )
-                continue
+def _is_ally_move(client, move):
+    return any(effect in move.effect for effect in ALLY_EFFECTS)
 
-            if client.battle.status == "stunned":
-                client.battle.status = None
-                battle_send_ic(
-                    client, msg=f"~{client.battle.fighter}~ is stunned and cannot fight"
-                )
-                continue
 
-            if client.battle.status == "confused":
-                confused = random.randint(1, client.area.battle_confusion_rate)
-                if confused == 1:
-                    client.battle.status = None
-                    battle_send_ic(
-                        client, msg=f"~{client.battle.fighter}~ snaps out of confusion"
-                    )
-                elif confused == client.area.battle_confusion_rate:
-                    battle_send_ic(
-                        client,
-                        msg=f"~{client.battle.fighter}~ is confused and misses the target",
-                        effect="confused",
-                    )
-                    continue
-                else:
-                    battle_send_ic(
-                        client,
-                        msg=f"~{client.battle.fighter}~ is confused but focuses on the target",
-                        effect="confused",
-                    )
+def _get_move_targets(client, move, is_ally_move):
+    """
+    Resolve the target list for a move.
 
-            if client.battle.status is not None and "sleep" in client.battle.status:
-                if client.battle.status == "sleep-1":
-                    battle_send_ic(
-                        client,
-                        msg=f"~{client.battle.fighter}~ is sleeping",
-                        effect="sleep",
-                    )
-                    client.battle.status = "sleep-2"
-                    continue
-                elif client.battle.status == "sleep-2":
-                    battle_send_ic(
-                        client,
-                        msg=f"~{client.battle.fighter}~ is sleeping",
-                        effect="sleep",
-                    )
-                    client.battle.status = "sleep-3"
-                    continue
-                else:
-                    battle_send_ic(client, msg=f"~{client.battle.fighter}~ wakes up")
+    Targeting behavior intentionally follows the original command:
+    - atkall hits either allies or enemies depending on move effects.
+    - multishot against a single target repeats that target.
+    - multishot + atkall randomly selects from valid targets.
+    """
+    area = client.area
 
-            move = client.battle.moves[client.battle.selected_move]
-
-            # check if the fighter misses the move
-            miss = random.randint(1, 100)
-            if move.accuracy < miss:
-                battle_send_ic(
-                    client, msg=f"~{client.battle.fighter}~ misses the target"
-                )
-                continue
-
-            # check if the fighter is paralysed
-            paralysis = random.randint(1, area.battle_paralysis_rate)
-            if (
-                paralysis == area.battle_paralysis_rate
-                and client.battle.status == "paralysis"
-            ):
-                battle_send_ic(
-                    client,
-                    msg=f"~{client.battle.fighter}~ is affected by paralysis and cannot fight",
-                    effect="paralysis",
-                    shake=1,
-                )
-                continue
-
-            # creating target list
-            if "atkall" in move.effect:
-                if (
-                    "heal" in move.effect
-                    or "healstatus" in move.effect
-                    or "atkraiseally" in move.effect
-                    or "defraiseally" in move.effect
-                    or "sparaiseally" in move.effect
-                    or "spdraiseally" in move.effect
-                    or "speraiseally" in move.effect
-                ):
-                    if client.battle.guild is None:
-                        targets = [c for c in client.area.fighters]
-                    else:
-                        targets = [
-                            c
-                            for c in client.area.battle_guilds[client.battle.guild]
-                            if c in client.area.fighters
-                        ]
-                else:
-                    if client.battle.guild is None:
-                        targets = [c for c in client.area.fighters if c != client]
-                    else:
-                        targets = [
-                            c
-                            for c in client.area.fighters
-                            if c not in client.area.battle_guilds[client.battle.guild]
-                        ]
-                    if "multishot" in move.effect:
-                        shots = random.randint(
-                            client.area.battle_min_multishot,
-                            client.area.battle_max_multishot,
-                        )
-                        targets = random.choices(targets, shots)
-            elif "multishot" in move.effect and "atkall" not in move.effect:
-                shots = random.randint(
-                    client.area.battle_min_multishot, client.area.battle_max_multishot
-                )
-                targets = []
-                for i in range(0, shots):
-                    targets.append(client.battle.target)
+    if "atkall" in move.effect:
+        if is_ally_move:
+            if client.battle.guild is None:
+                targets = list(area.fighters)
             else:
-                targets = [client.battle.target]
+                members = area.battle_guilds[client.battle.guild]
+                targets = [fighter for fighter in members if fighter in area.fighters]
+        else:
+            if client.battle.guild is None:
+                targets = [fighter for fighter in area.fighters if fighter != client]
+            else:
+                guild_members = area.battle_guilds[client.battle.guild]
+                targets = [
+                    fighter
+                    for fighter in area.fighters
+                    if fighter not in guild_members
+                ]
 
-            # send in ic the message 'fighter uses this move'
-            battle_send_ic(client, msg=f"~{client.battle.fighter}~ uses ~{move.name}~")
-
-            # Ally move
-            if "heal" in move.effect:
-                for target in targets:
-                    if target.battle.hp <= 0:
-                        if len(targets) == 1:
-                            battle_send_ic(
-                                client,
-                                msg=f"and tries to help but the target is already down",
-                            )
-                        continue
-                    if "heal" in move.effect:
-                        # calculate heal
-                        if "atk" == move.type:
-                            heal = (move.power + client.battle.atk) * 0.25
-                        else:
-                            heal = (move.power + client.battle.spa) * 0.25
-
-                        target.battle.hp += heal
-
-                        # check if heal+hp is greater than maxhp
-                        if target.battle.hp > target.battle.maxhp:
-                            target.battle.hp = target.battle.maxhp
-
-                        # send ic healing move
-                        if target == client:
-                            battle_send_ic(
-                                client,
-                                msg=f"and heals itself of ~{heal}~ hp",
-                                effect="lifeup",
-                            )
-                        else:
-                            battle_send_ic(
-                                target,
-                                msg=f"and heals ~{target.battle.fighter}~ of ~{heal}~ hp",
-                                effect="lifeup",
-                            )
-                        
-                    if "healstatus" in move.effect:
-                        if target.battle.status is None:
-                            battle_send_ic(
-                                target,
-                                f"and tries to remove status from ~{target.battle.fighter}~ but ~{target.battle.fighter}~ is healthy",
-                            )
-                        else:
-                            status = target.battle.status
-                            if "sleep" in status:
-                                status = "sleep"
-                            target.battle.status = None
-                            battle_send_ic(
-                                target,
-                                f"and removed {status} from ~{target.battle.fighter}~",
-                            )
-                            if status == "burn":
-                                target.battle.spd = (
-                                    target.battle.spd * area.battle_bonus_malus
-                                )
-                                target.battle.defe = (
-                                    target.battle.defe * area.battle_bonus_malus
-                                )
-
-                    if "atkraiseally" in move.effect:
-                        target.battle.atk = target.battle.atk * area.battle_bonus_malus
-                        battle_send_ic(
-                            target,
-                            msg=f" and raises the attack of ~{target.battle.fighter}~",
-                            effect="statup",
-                        )
-
-                    if "defraiseally" in move.effect:
-                        target.battle.defe = (
-                            target.battle.defe * area.battle_bonus_malus
-                        )
-                        battle_send_ic(
-                            target,
-                            msg=f" and raises the defense of ~{target.battle.fighter}~",
-                            effect="statup",
-                        )
-
-                    if "sparaiseally" in move.effect:
-                        target.battle.spa = target.battle.spa * area.battle_bonus_malus
-                        battle_send_ic(
-                            target,
-                            msg=f" and raises the special attack of ~{target.battle.fighter}~",
-                            effect="statup",
-                        )
-
-                    if "spdraiseally" in move.effect:
-                        target.battle.spd = target.battle.spd * area.battle_bonus_malus
-                        battle_send_ic(
-                            target,
-                            msg=f" and raises the special defense of ~{target.battle.fighter}~",
-                            effect="statup",
-                        )
-
-                    if "speraiseally" in move.effect:
-                        target.battle.spe = target.battle.spe * area.battle_bonus_malus
-                        battle_send_ic(
-                            target,
-                            msg=f" and raises the speed of ~{target.battle.fighter}~",
-                            effect="statup",
-                        )
-
-                continue
-
-            # damage move
-            for target in targets:
-                if target.battle.hp <= 0:
-                    if len(targets) == 1:
-                        battle_send_ic(client, msg="but the target is already down")
-                    continue
-
-                # calculate damage
-                if move.type == "atk":
-                    if target.battle.defe != 0:
-                        damage = move.power * client.battle.atk / target.battle.defe
-                    else:
-                        damage = target.battle.maxhp
-                    effect = "attack"
-                else:
-                    if target.battle.spd != 0:
-                        damage = move.power * client.battle.spa / target.battle.spd
-                    else:
-                        damage = target.battle.maxhp
-                    effect = "specialattack"
-
-                damage = round(damage, 2)
-
-                # calculate critical damage
-                critical = random.randint(1, area.battle_critical_rate)
-                critical_message = ""
-                if critical == area.battle_critical_rate:
-                    critical_message = " with a critical"
-                    damage = damage * area.battle_critical_bonus
-                target.battle.hp += -damage
-
-                if client.battle.status == "enraged":
-                    client.battle.status = None
-                    damage = damage * area.battle_enraged_bonus
-                    battle_send_ic(client, msg=f"focuses all strenght")
-
-                # send ic damage move
-                if damage == 0:
-                    battle_send_ic(
-                        target,
-                        msg=f"on ~{target.battle.fighter}~",
-                        effect=effect,
-                        shake=1,
-                    )
-                else:
-                    battle_send_ic(
-                        target,
-                        msg=f"and attacks ~{target.battle.fighter}~{critical_message} dealing a damage of ~{damage}~",
-                        effect=effect,
-                        shake=1,
-                    )
-
-                if target.battle.status is not None and "sleep" in target.battle.status:
-                    target.battle.status = None
-                    battle_send_ic(target, msg=f"~{target.battle.fighter}~ wakes up")
-
-                # check malus move effects
-                if "atkdown" in move.effect:
-                    target.battle.atk = target.battle.atk / area.battle_bonus_malus
-                    battle_send_ic(
-                        target,
-                        msg=f"The attack of ~{target.battle.fighter}~ goes down",
-                        effect="statdown",
-                    )
-                if "defdown" in move.effect:
-                    target.battle.defe = target.battle.defe / area.battle_bonus_malus
-                    battle_send_ic(
-                        target,
-                        msg=f"The defense of ~{target.battle.fighter}~ goes down",
-                        effect="statdown",
-                    )
-                if "spadown" in move.effect:
-                    target.battle.spa = target.battle.spa / area.battle_bonus_malus
-                    battle_send_ic(
-                        target,
-                        msg=f"The special attack of ~{target.battle.fighter}~ goes down",
-                        effect="statdown",
-                    )
-                if "spddown" in move.effect:
-                    target.battle.spd = target.battle.spd / area.battle_bonus_malus
-                    battle_send_ic(
-                        target,
-                        msg=f"The special defense of ~{target.battle.fighter}~ goes down",
-                        effect="statdown",
-                    )
-                if "spedown" in move.effect:
-                    target.battle.spe = target.battle.spe / area.battle_bonus_malus
-                    battle_send_ic(
-                        target,
-                        msg=f"The speed of ~{target.battle.fighter}~ goes down",
-                        effect="statdown",
-                    )
-                if "stealatk" in move.effect:
-                    client.battle.atk += target.battle.atk / area.battle_stolen_stat
-                    target.battle.atk += -target.battle.atk / area.battle_stolen_stat
-                    battle_send_ic(
-                        target,
-                        msg=f"~{client.battle.fighter}~ steals the attack of ~{target.battle.fighter}~",
-                        effect="stealstat",
-                    )
-                if "stealdef" in move.effect:
-                    client.battle.defe += target.battle.defe / area.battle_stolen_stat
-                    target.battle.defe += -target.battle.defe / area.battle_stolen_stat
-                    battle_send_ic(
-                        target,
-                        msg=f"~{client.battle.fighter}~ steals the defense of ~{target.battle.fighter}~",
-                        effect="stealstat",
-                    )
-                if "stealspa" in move.effect:
-                    client.battle.spa += target.battle.spa / area.battle_stolen_stat
-                    target.battle.spa += -target.battle.spa / area.battle_stolen_stat
-                    battle_send_ic(
-                        target,
-                        msg=f"~{client.battle.fighter}~ steals the special attack of ~{target.battle.fighter}~",
-                        effect="stealstat",
-                    )
-                if "stealspd" in move.effect:
-                    client.battle.spd += target.battle.spd / area.battle_stolen_stat
-                    target.battle.spd += -target.battle.spd / area.battle_stolen_stat
-                    battle_send_ic(
-                        target,
-                        msg=f"~{client.battle.fighter}~ steals the special defense of ~{target.battle.fighter}~",
-                        effect="stealstat",
-                    )
-                if "stealspe" in move.effect:
-                    client.battle.spe += target.battle.spe / area.battle_stolen_stat
-                    target.battle.spe += -target.battle.spe / area.battle_stolen_stat
-                    battle_send_ic(
-                        target,
-                        msg=f"~{client.battle.fighter}~ steals the speed of ~{target.battle.fighter}~",
-                        effect="stealstat",
-                    )
-                if "stealmana" in move.effect:
-                    client.battle.mana += target.battle.mana / area.battle_stolen_stat
-                    target.battle.mana += -target.battle.mana / area.battle_stolen_stat
-                    battle_send_ic(
-                        target,
-                        msg=f"~{client.battle.fighter}~ steals mana from ~{target.battle.fighter}~",
-                        effect="stealstat",
-                    )
-                if "poison" in move.effect:
-                    if target.battle.status is None:
-                        target.battle.status = "poison"
-                        battle_send_ic(
-                            target,
-                            msg=f"~{target.battle.fighter}~ is affected by poisoning",
-                            effect="poison",
-                            shake=1,
-                        )
-                if "paralysis" in move.effect:
-                    if target.battle.status is None:
-                        target.battle.status = "paralysis"
-                        battle_send_ic(
-                            target,
-                            msg=f"~{target.battle.fighter}~ is affected by paralysis",
-                            effect="paralysis",
-                            shake=1,
-                        )
-                if "burn" in move.effect:
-                    if target.battle.status is None:
-                        target.battle.status = "burn"
-                        battle_send_ic(
-                            target,
-                            msg=f"~{target.battle.fighter}~ is burned",
-                            effect="burn",
-                            shake=1,
-                        )
-                        target.battle.spd = target.battle.spd / area.battle_bonus_malus
-                        target.battle.defe = (
-                            target.battle.defe / area.battle_bonus_malus
-                        )
-                        battle_send_ic(
-                            target,
-                            msg=f"and ~{target.battle.fighter}~'s defensive statistics go down",
-                            effect="statdown",
-                        )
-                if "freeze" in move.effect:
-                    if target.battle.status is None:
-                        target.battle.status = "freeze"
-                        battle_send_ic(
-                            target,
-                            msg=f"~{target.battle.fighter}~ is frozen",
-                            effect="freeze",
-                            shake=1,
-                        )
-                if "stunned" in move.effect:
-                    if target.battle.status is None:
-                        target.battle.status = "stunned"
-                        battle_send_ic(
-                            target,
-                            msg=f"~{target.battle.fighter}~ is stunned",
-                            shake=1,
-                        )
-                if "confused" in move.effect:
-                    if target.battle.status is None:
-                        target.battle.status = "confused"
-                        battle_send_ic(
-                            target,
-                            msg=f"~{target.battle.fighter}~ is confused",
-                            effect="confused",
-                        )
-                if "sleep" in move.effect:
-                    if target.battle.status is None:
-                        target.battle.status = "sleep-1"
-                        battle_send_ic(
-                            target,
-                            msg=f"~{target.battle.fighter}~ is sleeping",
-                            effect="sleep",
-                        )
-                # check if target is dead
-                if target.battle.hp <= 0:
-                    battle_send_ic(
-                        target,
-                        msg=f"~{target.battle.fighter}~ ran out of hp!",
-                        offset=100,
-                    )
-
-            # check bonus move effect
-            if "atkraise" in move.effect:
-                client.battle.atk = client.battle.atk * area.battle_bonus_malus
-                battle_send_ic(
-                    client,
-                    msg=f"The attack of ~{client.battle.fighter}~ goes up",
-                    effect="statup",
+            if "multishot" in move.effect and targets:
+                shots = random.randint(
+                    area.battle_min_multishot,
+                    area.battle_max_multishot,
                 )
-            if "defraise" in move.effect:
-                client.battle.defe = client.battle.defe * area.battle_bonus_malus
-                battle_send_ic(
-                    client,
-                    msg=f"The defense of ~{client.battle.fighter}~ goes up",
-                    effect="statup",
-                )
-            if "sparaise" in move.effect:
-                client.battle.spa = client.battle.spa * area.battle_bonus_malus
-                battle_send_ic(
-                    client,
-                    msg=f"The special attack of ~{client.battle.fighter}~ goes up",
-                    effect="statup",
-                )
-            if "spdraise" in move.effect:
-                client.battle.spd = client.battle.spd * area.battle_bonus_malus
-                battle_send_ic(
-                    client,
-                    msg=f"The special defense of ~{client.battle.fighter}~ goes up",
-                    effect="statup",
-                )
-            if "speraise" in move.effect:
-                client.battle.spe = client.battle.spe * area.battle_bonus_malus
-                battle_send_ic(
-                    client,
-                    msg=f"The speed of ~{client.battle.fighter}~ goes up",
-                    effect="statup",
-                )
+                targets = random.choices(targets, k=shots)
 
-            if "enraged" in move.effect:
-                client.battle.status = "enraged"
-                battle_send_ic(
-                    client,
-                    msg=f"~{client.battle.fighter}~ is preparing for the next attack",
-                    effect="enraged",
-                )
+    elif "multishot" in move.effect:
+        shots = random.randint(
+            area.battle_min_multishot,
+            area.battle_max_multishot,
+        )
+        targets = [client.battle.target for _ in range(shots)]
 
-    # check poisoned, burned and frozen fighters
+    else:
+        targets = [client.battle.target]
+
+    return targets
+
+
+def _calculate_damage(client, target, move):
+    """Calculate base damage and the matching IC animation effect."""
+    if move.type == "atk":
+        if target.battle.defe != 0:
+            damage = move.power * client.battle.atk / target.battle.defe
+        else:
+            damage = target.battle.maxhp
+        animation = "attack"
+    else:
+        if target.battle.spd != 0:
+            damage = move.power * client.battle.spa / target.battle.spd
+        else:
+            damage = target.battle.maxhp
+        animation = "specialattack"
+
+    return round(damage, 2), animation
+
+
+def _apply_target_stat_downs(client, target, move, area):
+    for effect_name, (stat, label) in TARGET_LOWER_EFFECTS.items():
+        if effect_name not in move.effect:
+            continue
+
+        setattr(
+            target.battle,
+            stat,
+            getattr(target.battle, stat) / area.battle_bonus_malus,
+        )
+        battle_send_ic(
+            target,
+            msg=f"The {label} of ~{target.battle.fighter}~ goes down",
+            effect="statdown",
+        )
+
+
+def _apply_steal_effects(client, target, move, area):
+    for effect_name, (stat, label) in STEAL_EFFECTS.items():
+        if effect_name not in move.effect:
+            continue
+
+        stolen = getattr(target.battle, stat) / area.battle_stolen_stat
+
+        setattr(
+            client.battle,
+            stat,
+            getattr(client.battle, stat) + stolen,
+        )
+        setattr(
+            target.battle,
+            stat,
+            getattr(target.battle, stat) - stolen,
+        )
+
+        if stat == "mana":
+            message = (
+                f"~{client.battle.fighter}~ steals mana "
+                f"from ~{target.battle.fighter}~"
+            )
+        else:
+            message = (
+                f"~{client.battle.fighter}~ steals {label} "
+                f"of ~{target.battle.fighter}~"
+            )
+
+        battle_send_ic(target, msg=message, effect="stealstat")
+
+
+def _apply_status_effects(client, target, move, area):
+    """
+    Apply status effects.
+
+    Status effects are only applied when the target does not already have one,
+    matching the original behavior.
+    """
+    if move.effect and "poison" in move.effect and target.battle.status is None:
+        target.battle.status = "poison"
+        battle_send_ic(
+            target,
+            msg=f"~{target.battle.fighter}~ is affected by poisoning",
+            effect="poison",
+            shake=1,
+        )
+
+    if move.effect and "paralysis" in move.effect and target.battle.status is None:
+        target.battle.status = "paralysis"
+        battle_send_ic(
+            target,
+            msg=f"~{target.battle.fighter}~ is affected by paralysis",
+            effect="paralysis",
+            shake=1,
+        )
+
+    if move.effect and "burn" in move.effect and target.battle.status is None:
+        target.battle.status = "burn"
+        battle_send_ic(
+            target,
+            msg=f"~{target.battle.fighter}~ is burned",
+            effect="burn",
+            shake=1,
+        )
+
+        target.battle.spd /= area.battle_bonus_malus
+        target.battle.defe /= area.battle_bonus_malus
+
+        battle_send_ic(
+            target,
+            msg=f"and ~{target.battle.fighter}~'s defensive statistics go down",
+            effect="statdown",
+        )
+
+    if move.effect and "freeze" in move.effect and target.battle.status is None:
+        target.battle.status = "freeze"
+        target.battle.spe /= area.battle_bonus_malus
+
+        battle_send_ic(
+            target,
+            msg=f"~{target.battle.fighter}~ is frozen",
+            effect="freeze",
+            shake=1,
+        )
+        battle_send_ic(
+            target,
+            msg=f"and ~{target.battle.fighter}~'s speed goes down",
+            effect="statdown",
+        )
+
+    if move.effect and "stunned" in move.effect and target.battle.status is None:
+        target.battle.status = "stunned"
+        battle_send_ic(
+            target,
+            msg=f"~{target.battle.fighter}~ is stunned",
+            shake=1,
+        )
+
+    if move.effect and "confused" in move.effect and target.battle.status is None:
+        target.battle.status = "confused"
+        battle_send_ic(
+            target,
+            msg=f"~{target.battle.fighter}~ is confused",
+            effect="confused",
+        )
+
+    if move.effect and "sleep" in move.effect and target.battle.status is None:
+        target.battle.status = "sleep-1"
+        battle_send_ic(
+            target,
+            msg=f"~{target.battle.fighter}~ is sleeping",
+            effect="sleep",
+        )
+
+
+def _apply_ally_move(client, target, move, area, *, single_target):
+    """Apply healing and ally buffs to one target."""
+    if target.battle.hp <= 0:
+        if single_target:
+            battle_send_ic(
+                client,
+                msg="and tries to help but the target is already down",
+            )
+        return
+
+    if "heal" in move.effect:
+        if move.type == "atk":
+            heal = (move.power + client.battle.atk) * 0.25
+        else:
+            heal = (move.power + client.battle.spa) * 0.25
+
+        target.battle.hp = min(target.battle.maxhp, target.battle.hp + heal)
+
+        if target == client:
+            battle_send_ic(
+                client,
+                msg=f"and heals itself of ~{heal}~ hp",
+                effect="lifeup",
+            )
+        else:
+            battle_send_ic(
+                target,
+                msg=f"and heals ~{target.battle.fighter}~ of ~{heal}~ hp",
+                effect="lifeup",
+            )
+
+    if "healstatus" in move.effect:
+        if target.battle.status is None:
+            battle_send_ic(
+                target,
+                msg=(
+                    f"and tries to remove status from ~{target.battle.fighter}~ "
+                    f"but ~{target.battle.fighter}~ is healthy"
+                ),
+            )
+        else:
+            status = target.battle.status
+            display_status = "sleep" if "sleep" in status else status
+            target.battle.status = None
+
+            # Restore temporary stat penalties associated with the status.
+            if display_status == "burn":
+                target.battle.spd *= area.battle_bonus_malus
+                target.battle.defe *= area.battle_bonus_malus
+            elif display_status == "freeze":
+                target.battle.spe *= area.battle_bonus_malus
+
+            battle_send_ic(
+                target,
+                msg=f"and removed {display_status} from ~{target.battle.fighter}~",
+            )
+
+    for effect_name, (stat, label) in ALLY_RAISE_EFFECTS.items():
+        if effect_name not in move.effect:
+            continue
+
+        setattr(
+            target.battle,
+            stat,
+            getattr(target.battle, stat) * area.battle_bonus_malus,
+        )
+        battle_send_ic(
+            target,
+            msg=f"and raises the {label} of ~{target.battle.fighter}~",
+            effect="statup",
+        )
+
+
+def _apply_self_buffs(client, move, area):
+    """Apply self-targeted stat increases and the enraged status."""
+    for effect_name, (stat, label) in SELF_RAISE_EFFECTS.items():
+        if effect_name not in move.effect:
+            continue
+
+        setattr(
+            client.battle,
+            stat,
+            getattr(client.battle, stat) * area.battle_bonus_malus,
+        )
+        battle_send_ic(
+            client,
+            msg=f"The {label} of ~{client.battle.fighter}~ goes up",
+            effect="statup",
+        )
+
+    if "enraged" in move.effect:
+        client.battle.status = "enraged"
+        battle_send_ic(
+            client,
+            msg=f"~{client.battle.fighter}~ is preparing for the next attack",
+            effect="enraged",
+        )
+
+
+def _process_fighter_action(client, area):
+    """Resolve one fighter's selected action."""
+    if client.battle.hp <= 0:
+        return
+
+    if client.battle.selected_move == -2:
+        battle_send_ic(
+            client,
+            msg=f"~{client.battle.fighter}~ decides to skip the turn",
+        )
+        return
+
+    if client.battle.status == "stunned":
+        client.battle.status = None
+        battle_send_ic(
+            client,
+            msg=f"~{client.battle.fighter}~ is stunned and cannot fight",
+        )
+        return
+
+    if client.battle.status == "confused":
+        confusion = random.randint(1, area.battle_confusion_rate)
+
+        if confusion == 1:
+            client.battle.status = None
+            battle_send_ic(
+                client,
+                msg=f"~{client.battle.fighter}~ snaps out of confusion",
+            )
+        elif confusion == area.battle_confusion_rate:
+            battle_send_ic(
+                client,
+                msg=f"~{client.battle.fighter}~ is confused and misses the target",
+                effect="confused",
+            )
+            return
+        else:
+            battle_send_ic(
+                client,
+                msg=f"~{client.battle.fighter}~ is confused but focuses on the target",
+                effect="confused",
+            )
+
+    if client.battle.status is not None and "sleep" in client.battle.status:
+        if client.battle.status == "sleep-1":
+            battle_send_ic(
+                client,
+                msg=f"~{client.battle.fighter}~ is sleeping",
+                effect="sleep",
+            )
+            client.battle.status = "sleep-2"
+            return
+
+        if client.battle.status == "sleep-2":
+            battle_send_ic(
+                client,
+                msg=f"~{client.battle.fighter}~ is sleeping",
+                effect="sleep",
+            )
+            client.battle.status = "sleep-3"
+            return
+
+        client.battle.status = None
+        battle_send_ic(client, msg=f"~{client.battle.fighter}~ wakes up")
+
+    move = client.battle.moves[client.battle.selected_move]
+
+    # Accuracy check happens before paralysis, matching the original order.
+    if random.randint(1, 100) > move.accuracy:
+        battle_send_ic(
+            client,
+            msg=f"~{client.battle.fighter}~ misses the target",
+        )
+        return
+
+    if (
+        client.battle.status == "paralysis"
+        and random.randint(1, area.battle_paralysis_rate)
+        == area.battle_paralysis_rate
+    ):
+        battle_send_ic(
+            client,
+            msg=f"~{client.battle.fighter}~ is affected by paralysis and cannot fight",
+            effect="paralysis",
+            shake=1,
+        )
+        return
+
+    is_ally_move = _is_ally_move(client, move)
+    targets = _get_move_targets(client, move, is_ally_move)
+
+    battle_send_ic(
+        client,
+        msg=f"~{client.battle.fighter}~ uses ~{move.name}~",
+    )
+
+    if is_ally_move:
+        single_target = len(targets) == 1
+        for target in targets:
+            _apply_ally_move(
+                client,
+                target,
+                move,
+                area,
+                single_target=single_target,
+            )
+        return
+
+    enraged_multiplier = 1
+    if client.battle.status == "enraged":
+        client.battle.status = None
+        enraged_multiplier = area.battle_enraged_bonus
+        battle_send_ic(client, msg="focuses all strength")
+
+    for target in targets:
+        if target is None:
+            continue
+
+        if target.battle.hp <= 0:
+            if len(targets) == 1:
+                battle_send_ic(client, msg="but the target is already down")
+            continue
+
+        damage, animation = _calculate_damage(client, target, move)
+
+        critical_message = ""
+        if random.randint(1, area.battle_critical_rate) == area.battle_critical_rate:
+            critical_message = " with a critical"
+            damage *= area.battle_critical_bonus
+
+        damage *= enraged_multiplier
+        target.battle.hp -= damage
+
+        if damage == 0:
+            battle_send_ic(
+                target,
+                msg=f"on ~{target.battle.fighter}~",
+                effect=animation,
+                shake=1,
+            )
+        else:
+            battle_send_ic(
+                target,
+                msg=(
+                    f"and attacks ~{target.battle.fighter}~{critical_message} "
+                    f"dealing a damage of ~{damage}~"
+                ),
+                effect=animation,
+                shake=1,
+            )
+
+        # Damage wakes a sleeping target before further effects are applied.
+        if target.battle.status is not None and "sleep" in target.battle.status:
+            target.battle.status = None
+            battle_send_ic(target, msg=f"~{target.battle.fighter}~ wakes up")
+
+        # A defeated target no longer receives secondary effects. This avoids
+        # stealing stats from or applying a new status to a dead fighter.
+        if target.battle.hp > 0:
+            # Preserve the original order: stat changes, steals, then status.
+            _apply_target_stat_downs(client, target, move, area)
+            _apply_steal_effects(client, target, move, area)
+            _apply_status_effects(client, target, move, area)
+
+        if target.battle.hp <= 0:
+            battle_send_ic(
+                target,
+                msg=f"~{target.battle.fighter}~ ran out of hp!",
+                offset=100,
+            )
+
+    _apply_self_buffs(client, move, area)
+
+
+def _apply_end_of_turn_statuses(area):
+    """Apply poison, burn and freeze damage at the end of the turn."""
     for client in area.fighters:
         if client.battle.hp <= 0:
             continue
-        fighter_name = client.area.area_manager.char_list[client.char_id]
-        if client.battle.status == "poison" and client.battle.hp > 0:
-            client.battle.hp += -client.battle.maxhp / area.battle_poison_damage
+
+        if client.battle.status == "poison":
+            damage = client.battle.maxhp / area.battle_poison_damage
+            client.battle.hp -= damage
             battle_send_ic(
                 client,
-                msg=f"~{client.battle.fighter}~ is affected by poisoning and loses {client.battle.maxhp / area.battle_poison_damage} hp",
+                msg=(
+                    f"~{client.battle.fighter}~ is affected by poisoning "
+                    f"and loses {damage} hp"
+                ),
                 effect="poison",
                 shake=1,
             )
+
         if client.battle.status == "burn" and client.battle.hp > 0:
-            client.battle.hp += -client.battle.maxhp / area.battle_burn_damage
+            damage = client.battle.maxhp / area.battle_burn_damage
+            client.battle.hp -= damage
             battle_send_ic(
                 client,
-                msg=f"~{client.battle.fighter}~ is burned and loses {client.battle.maxhp / area.battle_burn_damage} hp",
+                msg=f"~{client.battle.fighter}~ is burned and loses {damage} hp",
                 effect="burn",
                 shake=1,
             )
+
         if client.battle.status == "freeze" and client.battle.hp > 0:
-            client.battle.hp += -client.battle.maxhp / area.battle_freeze_damage
+            damage = client.battle.maxhp / area.battle_freeze_damage
+            client.battle.hp -= damage
             battle_send_ic(
                 client,
-                msg=f"~{client.battle.fighter}~ is frozen and loses {client.battle.maxhp / area.battle_freeze_damage} hp",
+                msg=f"~{client.battle.fighter}~ is frozen and loses {damage} hp",
                 effect="freeze",
                 shake=1,
             )
-            target.battle.spe = target.battle.spe / area.battle_bonus_malus
-            battle_send_ic(
-                target,
-                msg=f"and ~{target.battle.fighter}~'s speed goes down",
-                effect="statdown",
-            )
-        if client.battle.hp <= 0 and client.battle.status in [
+
+        if client.battle.hp <= 0 and client.battle.status in {
             "poison",
             "burn",
             "freeze",
-        ]:
+        }:
             battle_send_ic(
-                client, msg=f"~{client.battle.fighter}~ ran out of hp!", offset=100
+                client,
+                msg=f"~{client.battle.fighter}~ ran out of hp!",
+                offset=100,
             )
 
-    # check dead fighters and unselect move and target
+
+def _cleanup_dead_fighters(area):
+    """Reset turn state and reload fighters removed from the battle."""
+    last_processed = None
+
     for client in list(area.fighters):
-        # Unselect move and target
+        last_processed = client
         client.battle.selected_move = -1
         client.battle.target = None
 
-        # check dead fighters
         if client.battle.hp <= 0:
             area.fighters.remove(client)
-            with open(
-                f"storage/battlesystem/{client.battle.fighter}.yaml",
-                "r",
-                encoding="utf-8",
-            ) as c_load:
-                char = yaml.safe_load(c_load)
-                client.battle = ClientManager.BattleChar(
-                    client, client.battle.fighter, char
-                )
-            guild = None
-            for g in client.area.battle_guilds:
-                if client in client.area.battle_guilds[g]:
-                    guild = g
+            reload_fighter(client)
 
-            client.battle.guild = guild
+    return last_processed
 
-    # check if there is a winner or everyone is dead
+
+def _resolve_battle_outcome(area, last_processed):
+    """Resolve winner/draw state and prepare the next turn."""
     if len(area.fighters) == 1:
         winner = area.fighters[0]
-        battle_send_ic(winner, msg=f"~{winner.battle.fighter}~ wins the battle!")
-        with open(
-            f"storage/battlesystem/{winner.battle.fighter}.yaml", "r", encoding="utf-8"
-        ) as c_load:
-            char = yaml.safe_load(c_load)
-            winner.battle = ClientManager.BattleChar(
-                winner, winner.battle.fighter, char
+        battle_send_ic(
+            winner,
+            msg=f"~{winner.battle.fighter}~ wins the battle!",
+        )
+        reload_fighter(winner)
+        area.fighters = []
+        return
+
+    if not area.fighters:
+        if last_processed is not None:
+            battle_send_ic(
+                last_processed,
+                msg="~Everyone~ is down...",
+                offset=100,
             )
-        guild = None
-        for g in winner.area.battle_guilds:
-            if winner in winner.area.battle_guilds[g]:
-                guild = g
+        return
 
-        winner.battle.guild = guild
-        area.fighters = []
-    elif len(area.fighters) == 0:
-        battle_send_ic(client, msg=f"~Everyone~ is down...", offset=100)
-        area.fighters = []
-    else:
-        # check if there is a winner guild
-        winner_guild = None
-        guilds = [c.battle.guild for c in area.fighters]
-        if len(set(guilds)) == 1 and guilds[0] is not None:
-            guild = guilds[0]
-            winner_guild = client.area.battle_guilds[guild]
-            battle_send_ic(winner_guild[0], msg=f"~{guild}~ wins the battle!")
-            area.fighters = []
-            for winner in winner_guild:
-                with open(
-                    f"storage/battlesystem/{winner.battle.fighter}.yaml",
-                    "r",
-                    encoding="utf-8",
-                ) as c_load:
-                    char = yaml.safe_load(c_load)
-                    winner.battle = ClientManager.BattleChar(
-                        winner, winner.battle.fighter, char
-                    )
-                guild = None
-                for g in winner.area.battle_guilds:
-                    if winner in winner.area.battle_guilds[g]:
-                        guild = g
+    guild_names = {fighter.battle.guild for fighter in area.fighters}
+    if len(guild_names) == 1 and None not in guild_names:
+        guild_name = next(iter(guild_names))
+        winner_guild = area.battle_guilds[guild_name]
 
-                winner.battle.guild = guild
-        else:
-            # prepare for the next turn
-            for client in area.fighters:
-                send_stats_fighter(client)
-                msg = send_battle_info(client)
-                client.send_ooc(msg)
+        battle_send_ic(
+            winner_guild[0],
+            msg=f"~{guild_name}~ wins the battle!",
+        )
+
+        area.fighters = []
+        for winner in winner_guild:
+            reload_fighter(winner)
+        return
+
+    # Nobody has won yet; show the state before the next turn.
+    for client in area.fighters:
+        send_stats_fighter(client)
+        client.send_ooc(send_battle_info(client))
+
+
+# ---------------------------------------------------------------------------
+# Battle engine
+# ---------------------------------------------------------------------------
+
+def start_battle_animation(area):
+    """
+    Execute one complete battle turn.
+
+    Order:
+    1. Sort by speed.
+    2. Resolve each selected action.
+    3. Apply end-of-turn status damage.
+    4. Remove defeated fighters and restore their base state.
+    5. Resolve winner/draw/next turn.
+    """
+    # Fastest fighter acts first.
+    area.fighters = sorted(
+        area.fighters,
+        key=lambda client: client.battle.spe,
+        reverse=True,
+    )
+
+    for client in area.fighters:
+        _process_fighter_action(client, area)
+
+    _apply_end_of_turn_statuses(area)
+    last_processed = _cleanup_dead_fighters(area)
+    _resolve_battle_outcome(area, last_processed)
+
     return area.fighters

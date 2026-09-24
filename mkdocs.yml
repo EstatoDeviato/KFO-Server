@@ -59,4 +59,5 @@ nav:
   - Guides:
       - In-Character Commands: in_character.md
       - Demo Scripting: demo_scripting.md
+      - Battle System: battle_commands_user_guide.md
       - Character URL Guide: url_guide.md
