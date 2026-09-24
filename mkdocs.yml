@@ -18,7 +18,6 @@ theme:
     primary: black
     accent: red
   features:
-    - navigation.footer
     - toc.integrate
     - content.code.annotate
     - content.action.edit
@@ -40,8 +39,13 @@ plugins:
   - search
 
 # Collapsible TOC sidebar: auto-expand the branch of the heading in view.
+# The stylesheet styles the bespoke toggle rows that overrides/partials/
+# toc-item.html renders (kept off the .md-nav__link class on purpose, see the
+# "Scrollspy safety" note in that file).
 extra_javascript:
   - javascripts/toc-collapse.js
+extra_css:
+  - stylesheets/toc-collapse.css
 
 # Internal planning docs never reach the public site.
 exclude_docs: ai/**

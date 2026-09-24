@@ -11,12 +11,21 @@
   guarantee those are unique within a page), so this file is self-contained
   and partials/toc.html stays stock. javascripts/toc-collapse.js auto-expands
   the branch of the heading currently being read.
+
+  Scrollspy safety: the theme's TOC scrollspy iterates every `.md-nav__link`
+  descendant of `[data-md-component="toc"]` and calls `anchor.hash` on it, so
+  non-anchor elements must NOT carry the `md-nav__link` class here. A stray
+  div or label with that class throws and aborts the theme's entire component
+  initialization, which also disables the sidebar height binding and leaves
+  long sidebars unscrollable. The toggle row therefore uses bespoke classes
+  (`md-toc__container` / `md-toc__toggle`), styled in
+  docs/stylesheets/toc-collapse.css.
 -#}
 {% set toc_id = "__toc_" ~ (toc_item.url | replace("/", "_") | replace(".", "_") | replace("#", "_")) %}
 <li class="md-nav__item{% if toc_item.children %} md-nav__item--nested{% endif %}">
   {% if toc_item.children %}
     <input class="md-nav__toggle md-toggle" type="checkbox" id="{{ toc_id }}">
-    <div class="md-nav__link md-nav__container">
+    <div class="md-toc__container">
       <a href="{{ toc_item.url }}" class="md-nav__link">
         <span class="md-ellipsis">
           {% if toc_item.typeset %}
@@ -28,11 +37,11 @@
           {% endif %}
         </span>
       </a>
-      <label class="md-nav__link" for="{{ toc_id }}" tabindex="0">
+      <label class="md-toc__toggle" for="{{ toc_id }}" id="{{ toc_id }}_label" tabindex="0">
         <span class="md-nav__icon md-icon"></span>
       </label>
     </div>
-    <nav class="md-nav" aria-label="{{ toc_item.title | striptags | e }}" aria-expanded="false">
+    <nav class="md-nav" aria-label="{{ toc_item.title | striptags | e }}" aria-labelledby="{{ toc_id }}_label" aria-expanded="false">
       <ul class="md-nav__list">
         {% for toc_item in toc_item.children %}
           {% include "partials/toc-item.html" %}

@@ -1,0 +1,100 @@
+/*
+ * Styling for the collapsible TOC sidebar toggle rows.
+ *
+ * overrides/partials/toc-item.html renders each collapsible branch as
+ *
+ *   <div class="md-toc__container">
+ *     <a class="md-nav__link">…title…</a>
+ *     <label class="md-toc__toggle" for="__toc_…">…arrow…</label>
+ *   </div>
+ *
+ * The theme styles that row on `.md-nav__link`, but giving non-anchor
+ * elements the `md-nav__link` class inside `[data-md-component="toc"]`
+ * crashes the theme's TOC scrollspy (it calls `anchor.hash` on every
+ * `.md-nav__link`), which aborts the theme's component initialization and
+ * leaves the sidebar with no height binding — long sidebars then overflow
+ * past the screen edge without a usable scrollbar. So the toggle row keeps
+ * bespoke classes, and this file mirrors the handful of theme styles it
+ * needs (row layout, indentation, and the arrow icon).
+ */
+
+/* Row: title link + collapse arrow, laid out like a .md-nav__link. */
+.md-nav__item--nested > .md-toc__container {
+  align-items: flex-start;
+  display: flex;
+  gap: .4rem;
+  margin-top: .4rem;
+  padding: 0rem .3rem;
+  scroll-snap-align: start;
+  transition: color 125ms;
+}
+
+/* No double padding: the title link inside the row loses its block padding. */
+.md-toc__container > .md-nav__link {
+  flex-grow: 1;
+  margin-top: 0;
+  min-width: 0;
+  padding: 0;
+}
+
+/* Match the theme's indentation of sub-entries (mirrors `.md-nav__link`). */
+[dir=ltr] .md-nav--primary .md-nav--secondary .md-toc__container { padding-left: 0rem; }
+[dir=ltr] .md-nav--primary .md-nav--secondary .md-nav .md-toc__container { padding-left: 2rem; }
+[dir=ltr] .md-nav--primary .md-nav--secondary .md-nav .md-nav .md-toc__container { padding-left: 2.6rem; }
+[dir=ltr] .md-nav--primary .md-nav--secondary .md-nav .md-nav .md-nav .md-toc__container { padding-left: 3.2rem; }
+[dir=rtl] .md-nav--primary .md-nav--secondary .md-toc__container { padding-right: 1.4rem; }
+[dir=rtl] .md-nav--primary .md-nav--secondary .md-nav .md-toc__container { padding-right: 2rem; }
+[dir=rtl] .md-nav--primary .md-nav--secondary .md-nav .md-nav .md-toc__container { padding-right: 2.6rem; }
+[dir=rtl] .md-nav--primary .md-nav--secondary .md-nav .md-nav .md-nav .md-toc__container { padding-right: 3.2rem; }
+
+/* Keep spacing consistent next to the sidebar scrollbar. */
+[dir=ltr] .md-nav--primary .md-nav__item > .md-toc__container { margin-right: .4rem; }
+[dir=rtl] .md-nav--primary .md-nav__item > .md-toc__container { margin-left: .4rem; }
+
+/* The collapse arrow: compact and clickable (takes over the label role). */
+.md-toc__container > .md-toc__toggle {
+  border-radius: .1rem;
+  cursor: pointer;
+  display: block;
+  flex-shrink: 0;
+  font-size: 1.2rem;
+  height: .75rem;
+  width: .75rem;
+}
+[dir=ltr] .md-toc__container > .md-toc__toggle { margin-right: -.2rem; }
+[dir=rtl] .md-toc__container > .md-toc__toggle { margin-left: -.2rem; }
+
+.md-toc__container > .md-toc__toggle:hover,
+.md-toc__container > .md-toc__toggle:focus-visible {
+  color: var(--md-accent-fg-color);
+}
+.md-toc__container > .md-toc__toggle:focus-visible {
+  outline-color: var(--md-accent-fg-color);
+  outline-offset: .2rem;
+}
+
+/* Arrow glyph: reuse the theme's "-next" nav icon, like primary sidebar rows. */
+.md-toc__container > .md-toc__toggle .md-nav__icon {
+  height: .75rem;
+  width: .75rem;
+}
+.md-toc__container > .md-toc__toggle .md-nav__icon:after {
+  background-color: currentcolor;
+  content: "";
+  display: block;
+  height: 100%;
+  -webkit-mask-image: var(--md-nav-icon--next);
+  mask-image: var(--md-nav-icon--next);
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  width: 100%;
+}
+
+/* Rotate the arrow to point down when the branch is expanded. */
+.md-nav__item--nested .md-nav__toggle:checked ~ .md-toc__container > .md-toc__toggle .md-nav__icon:after {
+  transform: rotate(90deg);
+}
