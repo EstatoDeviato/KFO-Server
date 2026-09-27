@@ -503,7 +503,7 @@ HUB_PREFS_META = {
 # instance attribute set in ``__init__`` or as a computed ``@property``.
 AREA_SCALAR_FIELDS = (
     "name", "background", "background_suffix", "overlay", "dark",
-    "locked", "status", "doc", "desc", "move_delay", "max_players",
+    "locked", "status", "doc", "desc", "motd", "move_delay", "max_players",
     "evidence_mod", "pos_lock", "abbreviation", "ambience", "broadcast_list",
     "background_dark", "pos_dark", "desc_dark", "msg_delay", "music_ref",
     "hp_def", "hp_pro", "music", "password", "triggers",
@@ -522,6 +522,7 @@ AREA_SCALAR_FIELDS = (
 AREA_FIELD_META = {
     "name": {"input": "text"},
     "desc": {"input": "text"},
+    "motd": {"input": "text"},
     "doc": {"input": "text"},
     "max_players": {"input": "number"},
     "status": {"input": "text"},
@@ -642,6 +643,9 @@ def _hp_strategy(side):
 AREA_WRITE_STRATEGIES = {
     "name": lambda s, area, value, extra: s.execute_command("area_rename", f"{area.id} {value}"),
     "desc": _in_area("desc", clear_cmd="desc_clear"),
+    "motd": lambda s, area, value, extra: s.execute_command_in_area(
+        area, "roommotd", "-c" if str(value).strip() == "" else str(value)
+    ),
     "doc": _in_area("doc", clear_cmd="cleardoc"),
     "max_players": _validated_in_area("max_players", "max_players must be an integer."),
     "pos_lock": _in_area("pos_lock", clear_cmd="pos_lock_clear"),
