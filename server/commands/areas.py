@@ -996,31 +996,24 @@ def ooc_cmd_clear_area_broadcast(client):
     client.send_ooc("Current area broadcast list has been cleared.")
 
 
-ROOM_MOTD_HELP = (
-    "Usage: /roommotd [-c] [message]\n"
-    "-c: Clear the room motd.\n"
-    "\n"
-    "Sets the welcome popup shown to players when they join this area.\n"
-    "\n"
-    "Formatting: type \\n for a new line (a backslash, then n).\n"
-    "\n"
-    "Only a CM, GM or moderator can set it. It clears when the room "
-    "empties or its last CM leaves."
-)
-
-
 @mod_only(area_owners=True)
 @command(Arg("arg", rest=True, default="", help="[-c] [message]"))
 def ooc_cmd_roommotd(client, arg):
     """
-    Set or clear the room motd: a welcome popup shown to players when they enter
-    the area. Run bare to view the formatting guide and the current motd.
+    Set or clear the room motd shown to players when they enter this area.
     Usage: /roommotd [-c] [message]
+
+    Run /roommotd on its own to view the current motd. Use -c to clear it.
+    Type \\n in the message for a new line (a backslash, then n).
+
+    Only a CM, GM or moderator can set it. The motd clears when the room
+    empties or its last CM leaves.
     """
     if arg == "":
-        client.send_ooc(ROOM_MOTD_HELP)
         if client.area.motd:
             client.send_ooc("Current room motd:\n" + client.area.motd)
+        else:
+            client.send_ooc("No room motd is set. Use /help roommotd for usage.")
         return
 
     if arg == "-c":
@@ -1032,7 +1025,7 @@ def ooc_cmd_roommotd(client, arg):
     # A literal \n (backslash + n) becomes a newline; pasted CRLF is normalized.
     text = arg.replace("\\n", "\n").replace("\r\n", "\n").replace("\r", "\n")
     if not text.strip():
-        client.send_ooc(ROOM_MOTD_HELP)
+        client.send_ooc("Use /help roommotd for usage.")
         return
 
     # Censor like chat: the motd is shown to everyone who enters the area.

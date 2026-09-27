@@ -119,15 +119,32 @@ def test_remove_client_clears_motd_when_room_empties():
 # --- command -----------------------------------------------------------------
 
 
-def test_roommotd_bare_shows_help_and_current_motd():
+def test_roommotd_bare_shows_current_motd():
     area = make_area()
     client = FakeClient(area, area.area_manager.server)
     area.set_motd("hi")
 
     ooc_cmd_roommotd(client, "")
 
-    assert any("Usage: /roommotd" in line for line in client.ooc)
     assert any("Current room motd:" in line for line in client.ooc)
+    assert not any("Usage: /roommotd" in line for line in client.ooc)
+
+
+def test_roommotd_bare_with_no_motd_points_to_help():
+    area = make_area()
+    client = FakeClient(area, area.area_manager.server)
+
+    ooc_cmd_roommotd(client, "")
+
+    assert any("/help roommotd" in line for line in client.ooc)
+
+
+def test_roommotd_docstring_documents_usage_and_formatting():
+    import inspect
+
+    doc = inspect.getdoc(ooc_cmd_roommotd) or ""
+    assert "Usage: /roommotd [-c] [message]" in doc
+    assert "new line" in doc
 
 
 def test_roommotd_clear_flag():
