@@ -1,5 +1,5 @@
 from server import database
-from server.constants import TargetType
+from server.constants import TargetType, censor
 from server.exceptions import ClientError, ArgumentError, AreaError
 from server.remote_client import RemoteClient
 
@@ -37,6 +37,7 @@ __all__ = [
     "ooc_cmd_auto_pair",
     "ooc_cmd_area_broadcast",
     "ooc_cmd_clear_area_broadcast",
+    "ooc_cmd_roommotd",
 ]
 
 @command(Arg("arg", rest=True, default="", help="background (blank shows current)"))
@@ -993,3 +994,51 @@ def ooc_cmd_clear_area_broadcast(client):
         return
     client.area.broadcast_list.clear()
     client.send_ooc("Current area broadcast list has been cleared.")
+
+
+ROOM_MOTD_HELP = (
+    "Usage: /roommotd [-c] [message]\n"
+    "-c: Clear the room motd.\n"
+    "\n"
+    "Sets the welcome popup shown to players when they join this area.\n"
+    "\n"
+    "Formatting: type \\n for a new line (a backslash, then n).\n"
+    "\n"
+    "Only a CM, GM or moderator can set it. It clears when the room "
+    "empties or its last CM leaves."
+)
+
+
+@mod_only(area_owners=True)
+@command(Arg("arg", rest=True, default="", help="[-c] [message]"))
+def ooc_cmd_roommotd(client, arg):
+    """
+    Set or clear the room motd: a welcome popup shown to players when they enter
+    the area. Run bare to view the formatting guide and the current motd.
+    Usage: /roommotd [-c] [message]
+    """
+    if arg == "":
+        client.send_ooc(ROOM_MOTD_HELP)
+        if client.area.motd:
+            client.send_ooc("Current room motd:\n" + client.area.motd)
+        return
+
+    if arg == "-c":
+        client.area.motd = ""
+        client.area.motd_held_by_cm = False
+        client.area.broadcast_ooc(f"{client.showname} cleared the room motd.")
+        return
+
+    # A literal \n (backslash + n) becomes a newline; pasted CRLF is normalized.
+    text = arg.replace("\\n", "\n").replace("\r\n", "\n").replace("\r", "\n")
+    if not text.strip():
+        client.send_ooc(ROOM_MOTD_HELP)
+        return
+
+    # Censor like chat: the motd is shown to everyone who enters the area.
+    if client.server.censors is not None and len(client.server.censors) > 0:
+        text = censor(text, client.server.censors["whole"], client.server.censors["replace"], True)
+        text = censor(text, client.server.censors["partial"], client.server.censors["replace"], False)
+
+    client.area.set_motd(text)
+    client.area.broadcast_ooc(f"{client.showname} set the room motd.")

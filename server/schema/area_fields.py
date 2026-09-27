@@ -380,6 +380,15 @@ AREA_PREFS_META = {
         "cm_allowed": False,
         "internal": True,
     },
+    "motd_held_by_cm": {
+        "description": (
+            "Whether the area's room motd was set while a CM was present; it "
+            "clears when the area runs out of CMs."
+        ),
+        "note": "Runtime state set by /roommotd; do not change directly.",
+        "cm_allowed": False,
+        "internal": True,
+    },
 }
 
 # Mirrored by `ooc_cmd_area_pref`'s `cm_allowed` gate (server/commands/hubs.py),

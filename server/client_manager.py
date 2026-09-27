@@ -456,6 +456,14 @@ class ClientManager:
             if motd != "":
                 self.send_ooc(f"📟MOTD📟\r\n{motd}\r\n")
 
+        def send_bb(self, msg):
+            """
+            Send a BB packet: an AO2 popup shown in a modal (courtroom.cpp
+            ``call_notice``). Used for the per-area room motd, which is shown to
+            players the moment they enter an area. Wire format: ``BB#<msg>#%``.
+            """
+            self.send_command("BB", msg)
+
         def send_hub_info(self):
             """Send the hub info to the client."""
             info = self.area.area_manager.info
