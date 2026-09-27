@@ -1,9 +1,9 @@
-"""Tests for the per-area room motd (/roommotd) and its BB popup delivery."""
+"""Tests for the per-area popup (/area_popup) and its BB popup delivery."""
 
 from unittest import mock
 
 from server.area import Area
-from server.commands.areas import ooc_cmd_roommotd
+from server.commands.areas import ooc_cmd_area_popup
 
 
 class FakeServer:
@@ -55,55 +55,55 @@ class FakeClient:
         self.ooc.append(msg)
 
 
-# --- Area.set_motd -----------------------------------------------------------
+# --- Area.set_popup -----------------------------------------------------------
 
 
-def test_set_motd_records_whether_a_cm_was_present():
+def test_set_popup_records_whether_a_cm_was_present():
     area = make_area()
-    area.set_motd("welcome to the room")
-    assert area.motd == "welcome to the room"
-    assert area.motd_held_by_cm is False  # no CM present at set time
+    area.set_popup("welcome to the room")
+    assert area.popup == "welcome to the room"
+    assert area.popup_held_by_cm is False  # no CM present at set time
 
     area._owners.add(FakeClient(area, area.area_manager.server))
-    area.set_motd("read the rules")
-    assert area.motd == "read the rules"
-    assert area.motd_held_by_cm is True
+    area.set_popup("read the rules")
+    assert area.popup == "read the rules"
+    assert area.popup_held_by_cm is True
 
 
 # --- clearing ----------------------------------------------------------------
 
 
-def test_remove_owner_clears_motd_when_last_cm_leaves():
+def test_remove_owner_clears_popup_when_last_cm_leaves():
     area = make_area()
     cm = FakeClient(area, area.area_manager.server)
     area._owners.add(cm)
-    area.set_motd("rules")
+    area.set_popup("rules")
 
     with mock.patch.object(area, "broadcast_ooc"):
         area.remove_owner(cm, dc=True)
 
-    assert area.motd == ""
-    assert area.motd_held_by_cm is False
+    assert area.popup == ""
+    assert area.popup_held_by_cm is False
 
 
-def test_remove_owner_keeps_motd_when_other_cms_remain():
+def test_remove_owner_keeps_popup_when_other_cms_remain():
     area = make_area()
     cm1 = FakeClient(area, area.area_manager.server, showname="cm1")
     cm2 = FakeClient(area, area.area_manager.server, showname="cm2")
     area._owners.update([cm1, cm2])
-    area.set_motd("rules")
+    area.set_popup("rules")
 
     with mock.patch.object(area, "broadcast_ooc"):
         area.remove_owner(cm1, dc=True)
 
-    assert area.motd == "rules"
+    assert area.popup == "rules"
 
 
-def test_remove_client_clears_motd_when_room_empties():
+def test_remove_client_clears_popup_when_room_empties():
     area = make_area()
     client = FakeClient(area, area.area_manager.server)
     area.clients.add(client)
-    area.set_motd("welcome")
+    area.set_popup("welcome")
 
     with mock.patch.object(area, "trigger"), \
             mock.patch.object(area, "change_status"), \
@@ -112,71 +112,71 @@ def test_remove_client_clears_motd_when_room_empties():
             mock.patch("server.database.log_area"):
         area.remove_client(client)
 
-    assert area.motd == ""
-    assert area.motd_held_by_cm is False
+    assert area.popup == ""
+    assert area.popup_held_by_cm is False
 
 
 # --- command -----------------------------------------------------------------
 
 
-def test_roommotd_bare_shows_current_motd():
+def test_area_popup_bare_shows_current_popup():
     area = make_area()
     client = FakeClient(area, area.area_manager.server)
-    area.set_motd("hi")
+    area.set_popup("hi")
 
-    ooc_cmd_roommotd(client, "")
+    ooc_cmd_area_popup(client, "")
 
-    assert any("Current room motd:" in line for line in client.ooc)
-    assert not any("Usage: /roommotd" in line for line in client.ooc)
+    assert any("Current area popup:" in line for line in client.ooc)
+    assert not any("Usage: /area_popup" in line for line in client.ooc)
 
 
-def test_roommotd_bare_with_no_motd_points_to_help():
+def test_area_popup_bare_with_no_popup_points_to_help():
     area = make_area()
     client = FakeClient(area, area.area_manager.server)
 
-    ooc_cmd_roommotd(client, "")
+    ooc_cmd_area_popup(client, "")
 
-    assert any("/help roommotd" in line for line in client.ooc)
+    assert any("/help area_popup" in line for line in client.ooc)
 
 
-def test_roommotd_docstring_documents_usage_and_formatting():
+def test_area_popup_docstring_documents_usage_and_formatting():
     import inspect
 
-    doc = inspect.getdoc(ooc_cmd_roommotd) or ""
-    assert "Usage: /roommotd [-c] [message]" in doc
+    doc = inspect.getdoc(ooc_cmd_area_popup) or ""
+    assert "Usage: /area_popup [-c] [message]" in doc
     assert "new line" in doc
 
 
-def test_roommotd_clear_flag():
+def test_area_popup_clear_flag():
     area = make_area()
     client = FakeClient(area, area.area_manager.server)
-    area.set_motd("hi")
-    area.motd_held_by_cm = True
+    area.set_popup("hi")
+    area.popup_held_by_cm = True
 
     with mock.patch.object(area, "broadcast_ooc") as broadcast:
-        ooc_cmd_roommotd(client, "-c")
+        ooc_cmd_area_popup(client, "-c")
 
-    assert area.motd == ""
-    assert area.motd_held_by_cm is False
+    assert area.popup == ""
+    assert area.popup_held_by_cm is False
     broadcast.assert_called_once()
 
 
-def test_roommotd_set_converts_backslash_n_to_newline():
+def test_area_popup_set_converts_backslash_n_to_newline():
     area = make_area()
     client = FakeClient(area, area.area_manager.server)
 
     with mock.patch.object(area, "broadcast_ooc"):
-        ooc_cmd_roommotd(client, "Line one\\nLine two")
+        ooc_cmd_area_popup(client, "Line one\\nLine two")
 
-    assert area.motd == "Line one\nLine two"
+    assert area.popup == "Line one\nLine two"
 
 
-def test_roommotd_set_censors_text():
+def test_area_popup_set_censors_text():
     server = FakeServer(censors={"whole": ["badword"], "partial": [], "replace": "*"})
     area = make_area()
     client = FakeClient(area, server)
 
     with mock.patch.object(area, "broadcast_ooc"):
-        ooc_cmd_roommotd(client, "this has a badword")
+        ooc_cmd_area_popup(client, "this has a badword")
 
-    assert area.motd == "this has a *******"
+    assert area.popup == "this has a *******"

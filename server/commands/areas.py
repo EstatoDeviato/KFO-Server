@@ -37,7 +37,7 @@ __all__ = [
     "ooc_cmd_auto_pair",
     "ooc_cmd_area_broadcast",
     "ooc_cmd_clear_area_broadcast",
-    "ooc_cmd_roommotd",
+    "ooc_cmd_area_popup",
 ]
 
 @command(Arg("arg", rest=True, default="", help="background (blank shows current)"))
@@ -998,40 +998,40 @@ def ooc_cmd_clear_area_broadcast(client):
 
 @mod_only(area_owners=True)
 @command(Arg("arg", rest=True, default="", help="[-c] [message]"))
-def ooc_cmd_roommotd(client, arg):
+def ooc_cmd_area_popup(client, arg):
     """
-    Set or clear the room motd shown to players when they enter this area.
-    Usage: /roommotd [-c] [message]
+    Set or clear the area popup shown to players when they enter this area.
+    Usage: /area_popup [-c] [message]
 
-    Run /roommotd on its own to view the current motd. Use -c to clear it.
+    Run /area_popup on its own to view the current popup. Use -c to clear it.
     Type \\n in the message for a new line (a backslash, then n).
 
-    Only a CM, GM or moderator can set it. The motd clears when the room
+    Only a CM, GM or moderator can set it. The popup clears when the room
     empties or its last CM leaves.
     """
     if arg == "":
-        if client.area.motd:
-            client.send_ooc("Current room motd:\n" + client.area.motd)
+        if client.area.popup:
+            client.send_ooc("Current area popup:\n" + client.area.popup)
         else:
-            client.send_ooc("No room motd is set. Use /help roommotd for usage.")
+            client.send_ooc("No area popup is set. Use /help area_popup for usage.")
         return
 
     if arg == "-c":
-        client.area.motd = ""
-        client.area.motd_held_by_cm = False
-        client.area.broadcast_ooc(f"{client.showname} cleared the room motd.")
+        client.area.popup = ""
+        client.area.popup_held_by_cm = False
+        client.area.broadcast_ooc(f"{client.showname} cleared the area popup.")
         return
 
     # A literal \n (backslash + n) becomes a newline; pasted CRLF is normalized.
     text = arg.replace("\\n", "\n").replace("\r\n", "\n").replace("\r", "\n")
     if not text.strip():
-        client.send_ooc("Use /help roommotd for usage.")
+        client.send_ooc("Use /help area_popup for usage.")
         return
 
-    # Censor like chat: the motd is shown to everyone who enters the area.
+    # Censor like chat: the popup is shown to everyone who enters the area.
     if client.server.censors is not None and len(client.server.censors) > 0:
         text = censor(text, client.server.censors["whole"], client.server.censors["replace"], True)
         text = censor(text, client.server.censors["partial"], client.server.censors["replace"], False)
 
-    client.area.set_motd(text)
-    client.area.broadcast_ooc(f"{client.showname} set the room motd.")
+    client.area.set_popup(text)
+    client.area.broadcast_ooc(f"{client.showname} set the area popup.")

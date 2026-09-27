@@ -459,7 +459,7 @@ class ClientManager:
         def send_bb(self, msg):
             """
             Send a BB packet: an AO2 popup shown in a modal (courtroom.cpp
-            ``call_notice``). Used for the per-area room motd, which is shown to
+            ``call_notice``). Used for the per-area popup, which is shown to
             players the moment they enter an area. Wire format: ``BB#<msg>#%``.
             """
             self.send_command("BB", msg)
