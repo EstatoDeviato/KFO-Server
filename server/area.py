@@ -174,6 +174,13 @@ class Area:
         self.votes = dict()
         self.password = ""
 
+        # Area popup: the welcome popup shown to players when they enter the area.
+        # popup_held_by_cm records whether a CM was present when the popup was set,
+        # which decides whether it clears when the area runs out of CMs (mirrors
+        # the single-CM reset of name/doc/desc/background).
+        self.popup = ""
+        self.popup_held_by_cm = False
+
         self.jukebox_votes = []
         self.jukebox_prev_char_id = -1
 
@@ -712,6 +719,9 @@ class Area:
             return
         database.log_area("area.join", client, self)
         self.update_client(client)
+        # Show the area's welcome popup (BB packet) if one is set.
+        if self.popup:
+            client.send_bb(self.popup)
         bridge = getattr(self.server, "gm_panel_bridge", None)
         if bridge is not None:
             bridge.on_client_present(client, self)
@@ -2080,6 +2090,18 @@ class Area:
         """
         return {o for o in self._owners if not isinstance(o, RemoteClient)}
 
+    def set_popup(self, popup):
+        """
+        Set the area's popup message, shown to players on entry.
+
+        Records whether a real CM was present at the time, which decides whether
+        the popup is cleared when the area runs out of CMs. A GM or mod does not
+        have to be a CM to set a popup, so "no CMs are left" cannot on its own
+        mean the popup's owner is gone.
+        """
+        self.popup = popup
+        self.popup_held_by_cm = len(self.real_cms()) > 0
+
     def get_owners(self):
         """
         Get a string of area's owners (CMs).
@@ -2118,6 +2140,10 @@ class Area:
         Remove a CM from the area.
         """
         self._owners.remove(client)
+        # Clear the area popup if it was set while a CM was present and none remain.
+        if len(self.real_cms()) == 0 and self.popup_held_by_cm:
+            self.popup = ""
+            self.popup_held_by_cm = False
         if not dc and len(client.broadcast_list) > 0:
             client.broadcast_list.clear()
             client.send_ooc("Your broadcast list has been cleared.")
