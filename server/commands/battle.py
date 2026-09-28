@@ -105,6 +105,14 @@ ITEM_VALUE_EFFECTS = {
 
 ITEM_ACTION = -3
 
+# Battle items are stored inside the existing character inventory.  The
+# fourth element is ignored by the existing inventory commands, so battle.py
+# can distinguish an item from normal inventory evidence without changing
+# inventory.py.
+BATTLE_ITEM_MARKER = "battle_item"
+BATTLE_ITEM_DESCRIPTION = "Battle item"
+BATTLE_ITEM_IMAGE = "empty.png"
+
 # Keep this as a tuple so the order shown by /battle_effects stays stable.
 BATTLE_EFFECTS = (
     "atkraise",
@@ -323,16 +331,108 @@ def _get_area_client_ids(area):
     return {member.id: member for member in area.clients}
 
 
+def _is_battle_item_entry(entry):
+    """Return True when an inventory entry was created by the battle system."""
+    return (
+        isinstance(entry, (list, tuple))
+        and len(entry) >= 4
+        and entry[3] == BATTLE_ITEM_MARKER
+    )
+
+
+def _inventory_item_names(client):
+    """Return battle-item names currently stored in the character inventory."""
+    if client is None:
+        return []
+
+    names = []
+    for entry in client.inventory:
+        if _is_battle_item_entry(entry):
+            names.append(derelative(str(entry[0]).strip().lower()))
+    return names
+
+
 def _ensure_bag(client):
-    """Return the player's item bag, creating it when necessary."""
+    """Return a live snapshot of the battle bag backed by client.inventory."""
     if client.battle is None:
         return None
+    return _inventory_item_names(client)
 
-    bag = getattr(client.battle, "bag", None)
-    if not isinstance(bag, list):
-        bag = []
-        client.battle.bag = bag
-    return bag
+
+def _save_inventory(client, inventory):
+    """Persist an updated inventory and refresh any open inventory viewer."""
+    client.inventory = inventory
+    update_inventory = getattr(client, "update_inventory", None)
+    if callable(update_inventory):
+        update_inventory()
+
+
+def _add_battle_items(client, item_name, quantity):
+    """Add battle-item copies to the existing character inventory."""
+    if client.battle is None or quantity <= 0:
+        return
+
+    normalized_name = derelative(item_name.strip().lower())
+    inventory = list(client.inventory)
+    inventory.extend(
+        [normalized_name, BATTLE_ITEM_DESCRIPTION, BATTLE_ITEM_IMAGE, BATTLE_ITEM_MARKER]
+        for _ in range(quantity)
+    )
+    _save_inventory(client, inventory)
+
+
+def _remove_battle_items(client, item_name, quantity):
+    """Remove a precise number of copies of a battle item from inventory."""
+    normalized_name = derelative(item_name.strip().lower())
+    inventory = list(client.inventory)
+    removed = 0
+    kept = []
+
+    for entry in inventory:
+        if (
+            removed < quantity
+            and _is_battle_item_entry(entry)
+            and derelative(str(entry[0]).strip().lower()) == normalized_name
+        ):
+            removed += 1
+            continue
+        kept.append(entry)
+
+    if removed:
+        _save_inventory(client, kept)
+    return removed
+
+
+def _remove_all_battle_items(client):
+    """Remove only battle items, leaving ordinary inventory evidence untouched."""
+    inventory = list(client.inventory)
+    kept = [entry for entry in inventory if not _is_battle_item_entry(entry)]
+    removed = len(inventory) - len(kept)
+
+    if removed:
+        _save_inventory(client, kept)
+    return removed
+
+
+def _migrate_legacy_bag(client, legacy_bag):
+    """Move an old in-memory BattleChar bag into the persistent inventory."""
+    if not legacy_bag or client.battle is None:
+        return
+
+    inventory = list(client.inventory)
+    for item_name in legacy_bag:
+        normalized_name = derelative(str(item_name).strip().lower())
+        if normalized_name:
+            inventory.append(
+                [
+                    normalized_name,
+                    BATTLE_ITEM_DESCRIPTION,
+                    BATTLE_ITEM_IMAGE,
+                    BATTLE_ITEM_MARKER,
+                ]
+            )
+
+    _save_inventory(client, inventory)
 
 
 def _item_action(item):
@@ -357,15 +457,11 @@ def _item_stat_multiplier(action, area):
 
 
 def _consume_item(client, item_name):
-    """Consume exactly one copy of an item from the player's bag."""
-    bag = _ensure_bag(client)
-    normalized_name = derelative(item_name.strip().lower())
-
-    if bag is None or normalized_name not in bag:
+    """Consume exactly one copy of an item from the player's inventory."""
+    if client.battle is None:
         return False
 
-    bag.remove(normalized_name)
-    return True
+    return _remove_battle_items(client, item_name, 1) == 1
 
 
 def _battle_fighter_exists(client):
@@ -401,8 +497,7 @@ def _finish_turn_if_ready(area):
 
 def _format_bag_lines(client, title="🎒 Items 🎒"):
     """Return formatted item-bag lines for a client."""
-    bag = getattr(client.battle, "bag", []) if client.battle is not None else []
-    counts = Counter(bag)
+    counts = Counter(_inventory_item_names(client))
 
     lines = [title]
     if not counts:
@@ -545,8 +640,11 @@ def reload_fighter(client, char=None):
     fighter_name = client.battle.fighter
     client.battle = ClientManager.BattleChar(client, fighter_name, char)
     client.battle.guild = find_guild(client)
-    client.battle.bag = previous_bag
     client.battle.selected_item = None
+
+    # Older versions kept items only on BattleChar.  Migrate those copies once
+    # so changing/reloading the fighter no longer loses the player's items.
+    _migrate_legacy_bag(client, previous_bag)
 
 
 # ---------------------------------------------------------------------------
@@ -571,8 +669,9 @@ def ooc_cmd_choose_fighter(client, arg):
     char = _load_fighter(fighter_name)
     client.battle = ClientManager.BattleChar(client, fighter_name, char)
     client.battle.guild = find_guild(client)
-    client.battle.bag = previous_bag
     client.battle.selected_item = None
+
+    _migrate_legacy_bag(client, previous_bag)
     send_info_fighter(client)
 
 
@@ -833,8 +932,7 @@ def ooc_cmd_give_item(client, target_id, name_item, quantity):
         client.send_ooc("Target has to choose a fighter first!")
         return
 
-    bag = _ensure_bag(target)
-    bag.extend([normalized_name] * quantity)
+    _add_battle_items(target, normalized_name, quantity)
     client.send_ooc(
         f"Gave {quantity}x {normalized_name} to [{target.id}]{target.showname}."
     )
@@ -875,8 +973,7 @@ def ooc_cmd_remove_item(client, target_id, name_item, quantity):
         )
         return
 
-    for _ in range(quantity):
-        bag.remove(normalized_name)
+    _remove_battle_items(target, normalized_name, quantity)
 
     client.send_ooc(
         f"Removed {quantity}x {normalized_name} from [{target.id}]{target.showname}."
@@ -901,9 +998,7 @@ def ooc_cmd_empty_bag(client, target_id):
         client.send_ooc("Target has to choose a fighter first!")
         return
 
-    bag = _ensure_bag(target)
-    removed = len(bag)
-    bag.clear()
+    removed = _remove_all_battle_items(target)
 
     client.send_ooc(f"Emptied [{target.id}]{target.showname}'s bag ({removed} items).")
     target.send_ooc("Your item bag has been emptied.")
@@ -2638,3 +2733,5 @@ def start_battle_animation(area):
     _resolve_battle_outcome(area, last_processed)
 
     return area.fighters
+
+
