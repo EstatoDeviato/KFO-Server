@@ -1,4 +1,5 @@
 import random
+import re
 from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
@@ -41,7 +42,6 @@ __all__ = [
     "ooc_cmd_battle_effects",
     "ooc_cmd_close_guild",
 ]
-
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -105,13 +105,17 @@ ITEM_VALUE_EFFECTS = {
 
 ITEM_ACTION = -3
 
-# Battle items are stored inside the existing character inventory.  The
-# fourth element is ignored by the existing inventory commands, so battle.py
-# can distinguish an item from normal inventory evidence without changing
-# inventory.py.
-BATTLE_ITEM_MARKER = "battle_item"
-BATTLE_ITEM_DESCRIPTION = "Battle item"
-BATTLE_ITEM_IMAGE = "empty.png"
+# Battle items are stored in the character's inventory (see /inventory), one
+# evidence per item type, named "<item name> x<quantity>" (e.g. "potion x3").
+ITEM_STACK_PATTERN = re.compile(
+    r"^(?P<label>.+?)\s+x(?P<quantity>\d{1,6})$",
+    re.IGNORECASE,
+)
+# The quantity is part of the evidence name, so it is capped to what the
+# pattern above can read back.
+MAX_ITEM_STACK = 999999
+# Same placeholder image /inventory_add uses when no image is given.
+ITEM_DEFAULT_IMAGE = "empty.png"
 
 # Keep this as a tuple so the order shown by /battle_effects stays stable.
 BATTLE_EFFECTS = (
@@ -331,108 +335,225 @@ def _get_area_client_ids(area):
     return {member.id: member for member in area.clients}
 
 
-def _is_battle_item_entry(entry):
-    """Return True when an inventory entry was created by the battle system."""
-    return (
-        isinstance(entry, (list, tuple))
-        and len(entry) >= 4
-        and entry[3] == BATTLE_ITEM_MARKER
-    )
+# ---------------------------------------------------------------------------
+# Item bag (stored in the character's inventory)
+# ---------------------------------------------------------------------------
+#
+# The bag is not a separate list: every battle item lives in the character's
+# normal /inventory as ONE evidence per item type, named "<item name> x<N>"
+# (for example "potion x3").  /bag, /give_item, /remove_item, /empty_bag and
+# /use_item therefore work on the very same data as the /inventory_* commands:
+#
+# * giving more copies of an item raises the xN of the existing evidence;
+# * using or removing items lowers it, and the evidence disappears at zero;
+# * an evidence whose name (minus the xN suffix) matches an item definition is
+#   read as a stack, so a plain "potion" made with /inventory_add counts as one
+#   potion and "potion x5" edited with /inventory_edit counts as five;
+# * any other evidence in the inventory is never touched by the bag commands.
+
+def _normalize_item_name(name):
+    """Return the storage key used for an item name."""
+    return derelative(str(name).strip().lower())
 
 
-def _inventory_item_names(client):
-    """Return battle-item names currently stored in the character inventory."""
-    if client is None:
-        return []
-
-    names = []
-    for entry in client.inventory:
-        if _is_battle_item_entry(entry):
-            names.append(derelative(str(entry[0]).strip().lower()))
-    return names
-
-
-def _ensure_bag(client):
-    """Return a live snapshot of the battle bag backed by client.inventory."""
-    if client.battle is None:
+def _known_item_key(name):
+    """Return the normalized item name if an item definition exists for it."""
+    key = _normalize_item_name(name)
+    if not key:
         return None
-    return _inventory_item_names(client)
+
+    try:
+        return key if _item_exists(key) else None
+    except (OSError, ValueError):
+        # Evidence names are free text: one that cannot be a file name (for
+        # example because it is too long) is simply not an item.
+        return None
 
 
-def _save_inventory(client, inventory):
-    """Persist an updated inventory and refresh any open inventory viewer."""
-    client.inventory = inventory
-    update_inventory = getattr(client, "update_inventory", None)
-    if callable(update_inventory):
-        update_inventory()
+def _parse_item_stack(entry):
+    """
+    Read an inventory entry as a stack of battle items.
+
+    Returns ``(item_key, quantity, label)``, where ``label`` is the visible part
+    of the evidence name without its xN suffix, or None when the entry is not
+    a battle item.
+    """
+    try:
+        raw_name = str(entry[0]).strip()
+    except (IndexError, KeyError, TypeError):
+        return None
+
+    match = ITEM_STACK_PATTERN.match(raw_name)
+    if match:
+        key = _known_item_key(match.group("label"))
+        if key is not None:
+            return key, int(match.group("quantity")), match.group("label")
+
+    # No (valid) suffix: a bare item name counts as a single copy.
+    key = _known_item_key(raw_name)
+    if key is not None:
+        return key, 1, raw_name
+
+    return None
 
 
-def _add_battle_items(client, item_name, quantity):
-    """Add battle-item copies to the existing character inventory."""
-    if client.battle is None or quantity <= 0:
+def _has_inventory(client):
+    """Return True when the client plays a character, and so owns an inventory."""
+    char_id = getattr(client, "char_id", None)
+    return isinstance(char_id, int) and char_id >= 0
+
+
+def _read_inventory(client):
+    """Return a private, editable copy of the client's inventory."""
+    if not _has_inventory(client):
+        return []
+    return [list(entry) for entry in client.inventory]
+
+
+def _write_inventory(client, inventory):
+    """Save the client's inventory and refresh the inventory panels open on it."""
+    if not _has_inventory(client):
         return
 
-    normalized_name = derelative(item_name.strip().lower())
-    inventory = list(client.inventory)
-    inventory.extend(
-        [normalized_name, BATTLE_ITEM_DESCRIPTION, BATTLE_ITEM_IMAGE, BATTLE_ITEM_MARKER]
-        for _ in range(quantity)
+    client.inventory = inventory
+
+    for other in list(client.area.clients):
+        if (
+            getattr(other, "char_id", None) == client.char_id
+            and getattr(other, "viewing_inventory", False)
+        ):
+            other.update_evidence_list()
+
+
+def _item_stacks(inventory, item_key):
+    """Return ``[(index, quantity, label), ...]`` for every stack of an item."""
+    stacks = []
+    for index, entry in enumerate(inventory):
+        parsed = _parse_item_stack(entry)
+        if parsed is not None and parsed[0] == item_key:
+            stacks.append((index, parsed[1], parsed[2]))
+    return stacks
+
+
+def _count_item(inventory, item_key):
+    """Return how many copies of an item an inventory list holds."""
+    return sum(quantity for _, quantity, _ in _item_stacks(inventory, item_key))
+
+
+def _new_item_entry(item_key, quantity):
+    """Build the inventory evidence used for a brand-new stack of an item."""
+    try:
+        item = _load_item(item_key)
+    except (OSError, yaml.YAMLError):
+        item = {}
+    if not isinstance(item, dict):
+        item = {}
+
+    label = str(item.get("Name") or item_key)
+    effect = str(item.get("Effect", "")).strip().lower() or "unknown"
+    value = item.get("Value")
+    evidence_name = str(item.get("EvidenceName", "")).strip()
+
+    if value is not None:
+        try:
+            effect += f" ({float(value):g})"
+        except (TypeError, ValueError):
+            effect += f" ({value})"
+
+    use_name = f'"{label}"' if " " in label else label
+    desc = (
+        "🎒 Battle item\n"
+        f"Effect: {effect}\n"
+        f"Use it in battle: /use_item {use_name} [target_id]"
     )
-    _save_inventory(client, inventory)
+    image = f"{evidence_name}.png" if evidence_name else ITEM_DEFAULT_IMAGE
+
+    return [f"{label} x{quantity}", desc, image]
 
 
-def _remove_battle_items(client, item_name, quantity):
-    """Remove a precise number of copies of a battle item from inventory."""
-    normalized_name = derelative(item_name.strip().lower())
-    inventory = list(client.inventory)
-    removed = 0
+def _set_item_quantity(inventory, item_key, quantity):
+    """
+    Make an inventory list hold exactly ``quantity`` copies of an item.
+
+    Every stack of the item is merged into the first one, which keeps its
+    description and image and only gets its xN suffix rewritten.  The evidence
+    is deleted when the quantity reaches zero and created (at the end of the
+    inventory) when the item was not there yet.  Evidence that is not a stack
+    of this item is never touched.
+    """
+    stacks = _item_stacks(inventory, item_key)
+
+    if quantity <= 0:
+        for index, _, _ in reversed(stacks):
+            del inventory[index]
+        return
+
+    if not stacks:
+        inventory.append(_new_item_entry(item_key, quantity))
+        return
+
+    first_index, _, label = stacks[0]
+    inventory[first_index][0] = f"{label} x{quantity}"
+
+    # Any duplicate stack of the same item is folded into the first one.
+    for index, _, _ in reversed(stacks[1:]):
+        del inventory[index]
+
+
+def _item_quantity(client, item_key):
+    """Return how many copies of an item the client holds in its inventory."""
+    return _count_item(_read_inventory(client), item_key)
+
+
+def _give_items(client, item_key, quantity):
+    """Add copies of an item to the client's inventory and return the new total."""
+    inventory = _read_inventory(client)
+    total = _count_item(inventory, item_key) + quantity
+    _set_item_quantity(inventory, item_key, total)
+    _write_inventory(client, inventory)
+    return total
+
+
+def _take_items(client, item_key, quantity):
+    """Remove up to ``quantity`` copies of an item and return how many were removed."""
+    inventory = _read_inventory(client)
+    available = _count_item(inventory, item_key)
+    removed = min(available, quantity)
+
+    if removed > 0:
+        _set_item_quantity(inventory, item_key, available - removed)
+        _write_inventory(client, inventory)
+
+    return removed
+
+
+def _bag_contents(client):
+    """Return a Counter of the battle items stored in the client's inventory."""
+    counts = Counter()
+    for entry in _read_inventory(client):
+        parsed = _parse_item_stack(entry)
+        if parsed is not None and parsed[1] > 0:
+            counts[parsed[0]] += parsed[1]
+    return counts
+
+
+def _empty_bag(client):
+    """Delete every battle item from the client's inventory; return the copies removed."""
+    inventory = _read_inventory(client)
     kept = []
+    removed = 0
 
     for entry in inventory:
-        if (
-            removed < quantity
-            and _is_battle_item_entry(entry)
-            and derelative(str(entry[0]).strip().lower()) == normalized_name
-        ):
-            removed += 1
-            continue
-        kept.append(entry)
+        parsed = _parse_item_stack(entry)
+        if parsed is None:
+            kept.append(entry)
+        else:
+            removed += parsed[1]
 
-    if removed:
-        _save_inventory(client, kept)
+    if len(kept) != len(inventory):
+        _write_inventory(client, kept)
+
     return removed
-
-
-def _remove_all_battle_items(client):
-    """Remove only battle items, leaving ordinary inventory evidence untouched."""
-    inventory = list(client.inventory)
-    kept = [entry for entry in inventory if not _is_battle_item_entry(entry)]
-    removed = len(inventory) - len(kept)
-
-    if removed:
-        _save_inventory(client, kept)
-    return removed
-
-
-def _migrate_legacy_bag(client, legacy_bag):
-    """Move an old in-memory BattleChar bag into the persistent inventory."""
-    if not legacy_bag or client.battle is None:
-        return
-
-    inventory = list(client.inventory)
-    for item_name in legacy_bag:
-        normalized_name = derelative(str(item_name).strip().lower())
-        if normalized_name:
-            inventory.append(
-                [
-                    normalized_name,
-                    BATTLE_ITEM_DESCRIPTION,
-                    BATTLE_ITEM_IMAGE,
-                    BATTLE_ITEM_MARKER,
-                ]
-            )
-
-    _save_inventory(client, inventory)
 
 
 def _item_action(item):
@@ -458,10 +579,11 @@ def _item_stat_multiplier(action, area):
 
 def _consume_item(client, item_name):
     """Consume exactly one copy of an item from the player's inventory."""
-    if client.battle is None:
+    item_key = _known_item_key(item_name)
+    if item_key is None:
         return False
 
-    return _remove_battle_items(client, item_name, 1) == 1
+    return _take_items(client, item_key, 1) == 1
 
 
 def _battle_fighter_exists(client):
@@ -496,8 +618,8 @@ def _finish_turn_if_ready(area):
 
 
 def _format_bag_lines(client, title="🎒 Items 🎒"):
-    """Return formatted item-bag lines for a client."""
-    counts = Counter(_inventory_item_names(client))
+    """Return formatted item-bag lines for a client (read from its inventory)."""
+    counts = _bag_contents(client)
 
     lines = [title]
     if not counts:
@@ -511,8 +633,8 @@ def _format_bag_lines(client, title="🎒 Items 🎒"):
 
 def _send_bag_message(viewer, target):
     """Send the target player's bag to the viewer."""
-    if target.battle is None:
-        viewer.send_ooc("Target has to choose a fighter first!")
+    if not _has_inventory(target):
+        viewer.send_ooc("Target has to choose a character first!")
         return
 
     lines = [
@@ -630,10 +752,9 @@ def reload_fighter(client, char=None):
 
     When ``char`` is supplied, it is used directly so a command can reload
     the battle object without reading the file a second time after saving.
-    The item bag belongs to the player, so it is preserved across reloads.
+    The item bag lives in the character's inventory, so a reload never
+    touches it.
     """
-    previous_bag = list(getattr(client.battle, "bag", [])) if client.battle else []
-
     if char is None:
         char = _load_fighter(client.battle.fighter)
 
@@ -641,10 +762,7 @@ def reload_fighter(client, char=None):
     client.battle = ClientManager.BattleChar(client, fighter_name, char)
     client.battle.guild = find_guild(client)
     client.battle.selected_item = None
-
-    # Older versions kept items only on BattleChar.  Migrate those copies once
-    # so changing/reloading the fighter no longer loses the player's items.
-    _migrate_legacy_bag(client, previous_bag)
+    client.update_evidence_list()
 
 
 # ---------------------------------------------------------------------------
@@ -664,24 +782,16 @@ def ooc_cmd_choose_fighter(client, arg):
         client.send_ooc("No fighter has this name!")
         return
 
-    previous_bag = list(getattr(client.battle, "bag", [])) if client.battle else []
-
     char = _load_fighter(fighter_name)
     client.battle = ClientManager.BattleChar(client, fighter_name, char)
     client.battle.guild = find_guild(client)
     client.battle.selected_item = None
-
-    _migrate_legacy_bag(client, previous_bag)
     send_info_fighter(client)
 
 
 @command()
 def ooc_cmd_info_fighter(client):
-    """
-    Send information about the currently selected fighter.
-
-    Usage: /info_fighter
-    """
+    """Send information about the currently selected fighter."""
     if _battle_fighter_exists(client):
         send_info_fighter(client)
     else:
@@ -910,16 +1020,20 @@ def ooc_cmd_create_item(client, name, effect, value, evidence_name):
 )
 def ooc_cmd_give_item(client, target_id, name_item, quantity):
     """
-    Give items to another player's battle bag.
+    Give items to another player's inventory.
 
-    Usage: /give_item <Target_ID> <ItemName> <Quantity>
+    The items are kept in the target's /inventory as a single evidence per
+    item type, named "<item> xN": giving more copies of an item the target
+    already owns just raises N.
+
+    Usage: /give_item <target_id> <item_name> <quantity>
     """
     if quantity <= 0:
         client.send_ooc("Quantity has to be greater than zero.")
         return
 
-    normalized_name = derelative(name_item.strip().lower())
-    if not _item_exists(normalized_name):
+    item_key = _known_item_key(name_item)
+    if item_key is None:
         client.send_ooc("No item has this name!")
         return
 
@@ -928,15 +1042,26 @@ def ooc_cmd_give_item(client, target_id, name_item, quantity):
         client.send_ooc("Target not found!")
         return
 
-    if target.battle is None:
-        client.send_ooc("Target has to choose a fighter first!")
+    if not _has_inventory(target):
+        client.send_ooc("Target has to choose a character first!")
         return
 
-    _add_battle_items(target, normalized_name, quantity)
+    current = _item_quantity(target, item_key)
+    if current + quantity > MAX_ITEM_STACK:
+        client.send_ooc(
+            f"A player cannot hold more than {MAX_ITEM_STACK} of the same item "
+            f"(target has {current})."
+        )
+        return
+
+    total = _give_items(target, item_key, quantity)
     client.send_ooc(
-        f"Gave {quantity}x {normalized_name} to [{target.id}]{target.showname}."
+        f"Gave {quantity}x {item_key} to [{target.id}]{target.showname} "
+        f"(now x{total} in their inventory)."
     )
-    target.send_ooc(f"You received {quantity}x {normalized_name}.")
+    target.send_ooc(
+        f"You received {quantity}x {item_key} (now x{total} in your inventory)."
+    )
 
 
 @mod_only(hub_owners=True)
@@ -947,38 +1072,40 @@ def ooc_cmd_give_item(client, target_id, name_item, quantity):
 )
 def ooc_cmd_remove_item(client, target_id, name_item, quantity):
     """
-    Remove items from another player's battle bag.
+    Remove items from another player's inventory.
 
-    Usage: /remove_item <Target_ID> <ItemName> <Quantity>
+    Lowers the N of the "<item> xN" evidence; the evidence is deleted when
+    no copy is left.
+
+    Usage: /remove_item <target_id> <item_name> <quantity>
     """
     if quantity <= 0:
         client.send_ooc("Quantity has to be greater than zero.")
         return
 
-    normalized_name = derelative(name_item.strip().lower())
+    item_key = _normalize_item_name(name_item)
     target = _get_area_client_ids(client.area).get(target_id)
     if target is None:
         client.send_ooc("Target not found!")
         return
 
-    if target.battle is None:
-        client.send_ooc("Target has to choose a fighter first!")
+    if not _has_inventory(target):
+        client.send_ooc("Target has to choose a character first!")
         return
 
-    bag = _ensure_bag(target)
-    available = bag.count(normalized_name)
+    available = _item_quantity(target, item_key)
     if available < quantity:
         client.send_ooc(
-            f"Target does not have enough {normalized_name} (has {available})."
+            f"Target does not have enough {item_key} (has {available})."
         )
         return
 
-    _remove_battle_items(target, normalized_name, quantity)
+    _take_items(target, item_key, quantity)
 
     client.send_ooc(
-        f"Removed {quantity}x {normalized_name} from [{target.id}]{target.showname}."
+        f"Removed {quantity}x {item_key} from [{target.id}]{target.showname}."
     )
-    target.send_ooc(f"{quantity}x {normalized_name} was removed from your bag.")
+    target.send_ooc(f"{quantity}x {item_key} was removed from your inventory.")
 
 
 @mod_only(hub_owners=True)
@@ -987,18 +1114,21 @@ def ooc_cmd_empty_bag(client, target_id):
     """
     Empty another player's item bag.
 
-    Usage: /empty_bag <Target_ID>
+    Only the battle items are deleted from the target's inventory; any other
+    evidence they carry is left alone.
+
+    Usage: /empty_bag <target_id>
     """
     target = _get_area_client_ids(client.area).get(target_id)
     if target is None:
         client.send_ooc("Target not found!")
         return
 
-    if target.battle is None:
-        client.send_ooc("Target has to choose a fighter first!")
+    if not _has_inventory(target):
+        client.send_ooc("Target has to choose a character first!")
         return
 
-    removed = _remove_all_battle_items(target)
+    removed = _empty_bag(target)
 
     client.send_ooc(f"Emptied [{target.id}]{target.showname}'s bag ({removed} items).")
     target.send_ooc("Your item bag has been emptied.")
@@ -1007,9 +1137,9 @@ def ooc_cmd_empty_bag(client, target_id):
 @command(Arg("target_id", int, default=None, help="target client ID"))
 def ooc_cmd_bag(client, target_id):
     """
-    Show the caller's item bag, or another player's bag for a GM.
+    Show the battle items in your inventory, or another player's for a GM.
 
-    Usage: /bag [Target_ID]
+    Usage: /bag [target_id]
     """
     area = client.area
     target = client
@@ -1026,11 +1156,11 @@ def ooc_cmd_bag(client, target_id):
             client.send_ooc("Target not found!")
             return
 
-    if target.battle is None:
+    if not _has_inventory(target):
         if target is client:
-            client.send_ooc("You have to choose a fighter first!")
+            client.send_ooc("You have to choose a character first!")
         else:
-            client.send_ooc("Target has to choose a fighter first!")
+            client.send_ooc("Target has to choose a character first!")
         return
 
     if target is client:
@@ -1047,9 +1177,12 @@ def ooc_cmd_bag(client, target_id):
 )
 def ooc_cmd_use_item(client, name_item, target_id):
     """
-    Select an item as the current battle action.
+    Select an item from your inventory as the current battle action.
 
-    Usage: /use_item <ItemName> [Target_ID]
+    One copy is consumed (the xN of its evidence goes down by one) when the
+    turn is resolved.
+
+    Usage: /use_item <item_name> [target_id]
     """
     area = client.area
 
@@ -1065,11 +1198,10 @@ def ooc_cmd_use_item(client, name_item, target_id):
         client.send_ooc("You already selected a move!")
         return
 
-    normalized_name = derelative(name_item.strip().lower())
-    bag = _ensure_bag(client)
+    normalized_name = _normalize_item_name(name_item)
 
-    if normalized_name not in bag:
-        client.send_ooc("You don't have this item in your bag!")
+    if _item_quantity(client, normalized_name) <= 0:
+        client.send_ooc("You don't have this item in your inventory!")
         return
 
     if not _item_exists(normalized_name):
@@ -1121,11 +1253,7 @@ def ooc_cmd_use_item(client, name_item, target_id):
     Arg("value", float),
 )
 def ooc_cmd_modify_stat(client, name, stat, value):
-    """
-    Modify one of a fighter's base stats.
-
-    Usage: /modify_stat <FighterName> <hp|mana|atk|defe|spa|spd|spe> <Value>
-    """
+    """Modify one of a fighter's base stats."""
     fighter_name = derelative(name.strip().lower())
 
     if not _fighter_exists(fighter_name):
@@ -1151,11 +1279,7 @@ def ooc_cmd_modify_stat(client, name, stat, value):
 @mod_only(hub_owners=True)
 @command(Arg("arg", rest=True, default="", help="fighter name"))
 def ooc_cmd_delete_fighter(client, arg):
-    """
-    Delete a fighter YAML definition.
-
-    Usage: /delete_fighter <FighterName>
-    """
+    """Delete a fighter YAML definition."""
     fighter_name = derelative(arg.strip().lower())
     path = FIGHTER_STORAGE / f"{fighter_name}.yaml"
 
@@ -1169,11 +1293,7 @@ def ooc_cmd_delete_fighter(client, arg):
 @mod_only(hub_owners=True)
 @command(Arg("arg", rest=True, default="", help="move name"))
 def ooc_cmd_delete_move(client, arg):
-    """
-    Delete a move from the currently selected fighter.
-
-    Usage: /delete_move <MoveName>
-    """
+    """Delete a move from the currently selected fighter."""
     if not _battle_fighter_exists(client):
         client.send_ooc("You have to choose the fighter first.")
         return
@@ -1346,11 +1466,7 @@ def send_battle_info(client):
 
 @command()
 def ooc_cmd_battle_info(client):
-    """
-    Send information about the current battle.
-
-    Usage: /battle_info
-    """
+    """Send information about the current battle."""
     if client in client.area.fighters:
         client.send_ooc(send_battle_info(client))
     else:
@@ -1440,11 +1556,7 @@ def ooc_cmd_fight(client):
 @mod_only(hub_owners=True)
 @command()
 def ooc_cmd_refresh_battle(client):
-    """
-    Reset the current battle and return to the lobby.
-
-    Usage: /refresh_battle
-    """
+    """Reset the current battle and return to the lobby."""
     area = client.area
 
     # Restore every fighter from YAML so temporary battle changes such as
@@ -1464,11 +1576,7 @@ def ooc_cmd_refresh_battle(client):
 
 @command()
 def ooc_cmd_surrender(client):
-    """
-    Surrender from the current battle.
-
-    Usage: /surrender
-    """
+    """Surrender from the current battle."""
     area = client.area
 
     if client not in area.fighters:
@@ -1498,11 +1606,7 @@ def ooc_cmd_surrender(client):
 @mod_only(hub_owners=True)
 @command(Arg("id", int, help="target client ID"))
 def ooc_cmd_remove_fighter(client, id):
-    """
-    Force a fighter to leave the battle.
-
-    Usage: /remove_fighter <Target_ID>
-    """
+    """Force a fighter to leave the battle."""
     area = client.area
     fighter_ids = _get_fighter_ids(area)
 
@@ -1537,11 +1641,7 @@ def ooc_cmd_remove_fighter(client, id):
 @mod_only(hub_owners=True)
 @command(Arg("id", int, help="target client ID"))
 def ooc_cmd_force_skip_move(client, id):
-    """
-    Force a fighter to skip the current turn.
-
-    Usage: /force_skip_move <Target_ID>
-    """
+    """Force a fighter to skip the current turn."""
     area = client.area
     fighter_ids = _get_fighter_ids(area)
 
@@ -1565,11 +1665,7 @@ def ooc_cmd_force_skip_move(client, id):
 
 @command()
 def ooc_cmd_skip_move(client):
-    """
-    Skip the current turn.
-
-    Usage: /skip_move
-    """
+    """Skip the current turn."""
     area = client.area
 
     if client not in area.fighters:
@@ -1631,11 +1727,7 @@ def ooc_cmd_close_guild(client, arg):
 
 @command()
 def ooc_cmd_battle_effects(client):
-    """
-    Show all available battle effects.
-
-    Usage: /battle_effects
-    """
+    """Show all available battle effects."""
     lines = ["Available Battle Effects:"]
     lines.extend(f"- {effect}" for effect in BATTLE_EFFECTS)
     client.send_ooc("\n".join(lines))
@@ -1705,11 +1797,7 @@ def ooc_cmd_leave_guild(client, id):
 
 @command(Arg("id", int, help="target client ID"))
 def ooc_cmd_join_guild(client, id):
-    """
-    Invite another fighter to the guild you lead.
-
-    Usage: /join_guild <Target_ID>
-    """
+    """Invite another fighter to the guild you lead."""
     area = client.area
 
     if client.battle is None:
@@ -1756,11 +1844,7 @@ def ooc_cmd_join_guild(client, id):
 
 @command(Arg("arg", rest=True, default="", help="guild name"))
 def ooc_cmd_create_guild(client, arg):
-    """
-    Create a guild and become its leader.
-
-    Usage: /create_guild <GuildName>
-    """
+    """Create a guild and become its leader."""
     if client.battle is None:
         client.send_ooc("You have to choose a fighter first!")
         return
@@ -1783,11 +1867,7 @@ def ooc_cmd_create_guild(client, arg):
 
 @command()
 def ooc_cmd_info_guild(client):
-    """
-    Send information about the current guild.
-
-    Usage: /info_guild
-    """
+    """Send information about the current guild."""
     if client.battle is None:
         client.send_ooc("You have to choose a fighter first!")
         return
@@ -1939,6 +2019,14 @@ def battle_send_ic(client, msg, effect="", shake=0, offset=0, evidence=""):
     else:
         sfx = ""
 
+    if evidence != "":
+        evidences = [("Item", "Item", f"{evidence}.png")]
+        evidence_id = 1
+        for c in client.area.clients:
+            c.send_command("LE", *evidences)
+    else:
+        evidence_id = [0]
+
     other_offset = 0
     other_emote = ""
     other_flip = 0
@@ -1973,7 +2061,9 @@ def battle_send_ic(client, msg, effect="", shake=0, offset=0, evidence=""):
         other_folder=other_folder,
         screenshake=shake,
         effect=f"{effect}|BattleEffects|{sfx}",
+        evidence=evidence_id,
     )
+    
 
 
 # ---------------------------------------------------------------------------
@@ -2725,7 +2815,8 @@ def start_battle_animation(area):
         reverse=True,
     )
 
-    for client in area.fighters:
+    for i, client in enumerate(area.fighters):
+        client.battle.fighter_id = i
         _process_fighter_action(client, area)
 
     _apply_end_of_turn_statuses(area)
@@ -2733,5 +2824,3 @@ def start_battle_animation(area):
     _resolve_battle_outcome(area, last_processed)
 
     return area.fighters
-
-
