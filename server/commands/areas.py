@@ -1007,8 +1007,8 @@ def ooc_cmd_area_popup(client, arg):
     Run /area_popup on its own to view the current popup. Use /area_popup_clear to clear it.
     Type \\n in the message for a new line (a backslash, then n).
 
-    Only a CM, GM or moderator can set it. The popup clears when the room
-    empties or its last CM leaves.
+    Only a CM, GM or moderator can set it. A popup set while a CM is present
+    is cleared when the area runs out of CMs.
     """
     if arg == "":
         if client.area.popup:
