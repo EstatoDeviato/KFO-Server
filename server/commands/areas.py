@@ -38,6 +38,7 @@ __all__ = [
     "ooc_cmd_area_broadcast",
     "ooc_cmd_clear_area_broadcast",
     "ooc_cmd_area_popup",
+    "ooc_cmd_area_popup_clear",
 ]
 
 @command(Arg("arg", rest=True, default="", help="background (blank shows current)"))
@@ -997,13 +998,13 @@ def ooc_cmd_clear_area_broadcast(client):
 
 
 @mod_only(area_owners=True)
-@command(Arg("arg", rest=True, default="", help="[-c] [message]"))
+@command(Arg("arg", rest=True, default="", help="message (blank shows current)"))
 def ooc_cmd_area_popup(client, arg):
     """
-    Set or clear the area popup shown to players when they enter this area.
-    Usage: /area_popup [-c] [message]
+    Set the area popup shown to players when they enter this area.
+    Usage: /area_popup <message>
 
-    Run /area_popup on its own to view the current popup. Use -c to clear it.
+    Run /area_popup on its own to view the current popup. Use /area_popup_clear to clear it.
     Type \\n in the message for a new line (a backslash, then n).
 
     Only a CM, GM or moderator can set it. The popup clears when the room
@@ -1014,12 +1015,6 @@ def ooc_cmd_area_popup(client, arg):
             client.send_ooc("Current area popup:\n" + client.area.popup)
         else:
             client.send_ooc("No area popup is set. Use /help area_popup for usage.")
-        return
-
-    if arg == "-c":
-        client.area.popup = ""
-        client.area.popup_held_by_cm = False
-        client.area.broadcast_ooc(f"{client.showname} cleared the area popup.")
         return
 
     # A literal \n (backslash + n) becomes a newline; pasted CRLF is normalized.
@@ -1035,3 +1030,15 @@ def ooc_cmd_area_popup(client, arg):
 
     client.area.set_popup(text)
     client.area.broadcast_ooc(f"{client.showname} set the area popup.")
+
+
+@mod_only(area_owners=True)
+@command()
+def ooc_cmd_area_popup_clear(client):
+    """
+    Clear the area popup shown to players when they enter this area.
+    Usage: /area_popup_clear
+    """
+    client.area.popup = ""
+    client.area.popup_held_by_cm = False
+    client.area.broadcast_ooc(f"{client.showname} cleared the area popup.")

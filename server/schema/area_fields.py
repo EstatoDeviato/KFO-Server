@@ -643,9 +643,7 @@ def _hp_strategy(side):
 AREA_WRITE_STRATEGIES = {
     "name": lambda s, area, value, extra: s.execute_command("area_rename", f"{area.id} {value}"),
     "desc": _in_area("desc", clear_cmd="desc_clear"),
-    "popup": lambda s, area, value, extra: s.execute_command_in_area(
-        area, "area_popup", "-c" if str(value).strip() == "" else str(value)
-    ),
+    "popup": _in_area("area_popup", clear_cmd="area_popup_clear"),
     "doc": _in_area("doc", clear_cmd="cleardoc"),
     "max_players": _validated_in_area("max_players", "max_players must be an integer."),
     "pos_lock": _in_area("pos_lock", clear_cmd="pos_lock_clear"),
