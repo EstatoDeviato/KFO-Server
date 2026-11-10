@@ -345,13 +345,14 @@ class Area:
         use GM commands (e.g. the hub-wide `/timer 0`). In claim-only hubs
         (e.g. KFO Hub 0, where only areas can be claimed) it is added to the
         area's CM owner set instead, so a CM-set automation script acts as an
-        area owner and can never escalate to GM power. It is added directly
-        (not via `add_owner`, which broadcasts and hides the client) because
-        many command bodies check the owner sets themselves rather than going
-        through the `@mod_only` decorator.
+        area owner and can never escalate to GM power (unless said area cannot
+        be CM-claimed). It is added directly (not via `add_owner`, which
+        broadcasts and hides the client) because many command bodies check the
+        owner sets themselves rather than going through the `@mod_only`
+        decorator.
         """
         if self._script_client is None:
-            can_gm = self.area_manager.can_gm
+            can_gm = self.area_manager.can_gm or not self.can_cm
             self._script_client = RemoteClient(self.server, is_mod=False, name="[SCRIPT]", is_gm=can_gm)
             self._script_client.is_automation = True
             self._script_client.join_area(self)
@@ -602,6 +603,10 @@ class Area:
             self.auto_pair_max = area["auto_pair_max"]
         if "auto_pair_cycle" in area:
             self.auto_pair_cycle = area["auto_pair_cycle"]
+        if "triggers" in area:
+            self.triggers = area["triggers"]
+        if "variables" in area:
+            self.variables = area["variables"]
 
     def save(self):
         area = OrderedDict()
@@ -687,6 +692,10 @@ class Area:
         area["auto_pair"] = self.auto_pair
         area["auto_pair_max"] = self.auto_pair_max
         area["auto_pair_cycle"] = self.auto_pair_cycle
+        if len(self.triggers) > 0:
+            area["triggers"] = self.triggers
+        if len(self.variables) > 0:
+            area["variables"] = self.variables
         return area
 
     def play_client_ambience(self, client):
@@ -1541,7 +1550,7 @@ class Area:
             # Add a testimony index marker in the showname
             if statement[15] == "":
                 # Since the char name might be subfoldered, use the foldername as the char name
-                statement[15] = f"[{idx+1}] {statement[2].rsplit("/", 1)[-1]}"
+                statement[15] = f"[{idx+1}] {statement[2].rsplit('/', 1)[-1]}"
             else:
                 statement[15] = f"[{idx+1}] {statement[15]}"
 
@@ -1628,14 +1637,17 @@ class Area:
                     # chara_client_info["HDID"] = str(c.hdid)
                     chara_client_info["IPID"] = str(c.ipid)
 
-                # if(c.files):
-                #     chara_client_info["url"] = c.files[1]
+                if c.char_url != "":
+                    chara_client_info["url"] = c.char_url
 
                 # if(c.char_outfit):
                 #     chara_client_info["outfit"] = c.char_outfit
 
                 if c.desc:
                     chara_client_info["status"] = c.desc
+
+                
+                
                 player_data_to_send.append(chara_client_info)
         return_data["data"] = player_data_to_send
 
@@ -2130,7 +2142,7 @@ class Area:
         self.update_judge_buttons(client)
 
         self.broadcast_ooc(f"{client.showname} [{client.id}] is CM in this area now.")
-
+        self.server.player_state_observer.notify_changed(client)
         bridge = getattr(self.server, "gm_panel_bridge", None)
         if bridge is not None:
             bridge.on_area_cm_roster_changed(self)
@@ -2140,6 +2152,11 @@ class Area:
         Remove a CM from the area.
         """
         self._owners.remove(client)
+
+        # remote clients should not affect anything else when removed
+        if isinstance(client, RemoteClient):
+            return
+
         # Clear the area popup if it was set while a CM was present and none remain.
         if len(self.real_cms()) == 0 and self.popup_held_by_cm:
             self.popup = ""
@@ -2173,7 +2190,7 @@ class Area:
             self.update_judge_buttons(client)
 
         self.broadcast_ooc(f"{client.showname} [{client.id}] is no longer CM in this area.")
-
+        self.server.player_state_observer.notify_changed(client)
         bridge = getattr(self.server, "gm_panel_bridge", None)
         if bridge is not None:
             bridge.on_area_cm_roster_changed(self)

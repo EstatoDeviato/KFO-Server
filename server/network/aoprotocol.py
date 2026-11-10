@@ -190,7 +190,7 @@ class AOProtocol(asyncio.Protocol):
         :returns: returns True if message was validated
 
         """
-        if needs_auth and (self.client.char_id is None or self.client.char_id == -1) and not self.client.is_mod and self.client not in self.client.area.owners:
+        if needs_auth and (self.client.char_id is None) and not self.client.is_mod and self.client not in self.client.area.owners:
             return False
         if len(args) != len(types):
             return False
@@ -373,7 +373,7 @@ class AOProtocol(asyncio.Protocol):
         if not self.client.joined:
             self.client.joined = True
             self.client.area.area_manager.send_arup_players()
-            self.server.player_state_observer.register_client(self.client)
+            self.server.player_state_observer.notify_changed(self.client)
 
     def net_cmd_cc(self, args):
         """Character selection.
@@ -711,7 +711,7 @@ class AOProtocol(asyncio.Protocol):
             args,
             self.ArgType.STR, # 0 # msg_type
             self.ArgType.STR_OR_EMPTY, # 1  # pre
-            self.ArgType.STR, # 2 # folder
+            self.ArgType.STR_OR_EMPTY, # 2 # folder
             self.ArgType.STR_OR_EMPTY, # 3 # anim
             self.ArgType.STR_OR_EMPTY, # 4  # text
             self.ArgType.STR, # 5 # pos
@@ -734,7 +734,7 @@ class AOProtocol(asyncio.Protocol):
             self.ArgType.STR, # 22 # frames_realization
             self.ArgType.STR, # 23 # frames_sfx
             self.ArgType.INT, # 24 # additive
-            self.ArgType.STR, # 25 # effect
+            self.ArgType.STR_OR_EMPTY, # 25 # effect
             self.ArgType.INT, # 26 # third_charid
             self.ArgType.STR_OR_EMPTY, # 27 # video
         ):
@@ -782,6 +782,12 @@ class AOProtocol(asyncio.Protocol):
             self.client.send_ooc(
                 f"Something went wrong! Please report this to the developers:\n{args}")
             return
+
+        if cid == -1 and not self.client.is_mod and not self.client in self.client.area.owners:
+            self.client.send_ooc(
+                "You are not authorized to speak as a Spectator!")
+            return
+
         # Targets for whispering
         whisper_clients = None
 
@@ -806,6 +812,9 @@ class AOProtocol(asyncio.Protocol):
             self.client.send_ooc(
                 "Showname changes are forbidden in this area!")
             return
+        broadcast_state = False
+        old_iniswap_state = self.client.iniswap
+        # Test if the client is iniswap and also update client.iniswap to it
         if self.client.area.is_iniswap(self.client, pre, anim, folder, sfx):
             folder = self.client.char_name
             self.client.send_ooc(
@@ -816,6 +825,8 @@ class AOProtocol(asyncio.Protocol):
             self.client.send_ooc(
                 "You may not iniswap while you are charcursed!")
             return
+        # we broadcast our playerlist state if we iniswapped
+        broadcast_state = old_iniswap_state != self.client.iniswap
         if (self.server.config["block_relative"]):
             pre = derelative(pre)
             anim = derelative(anim)
@@ -1167,6 +1178,8 @@ class AOProtocol(asyncio.Protocol):
                     evi.desc = f"(👀Discovered in pos: {evi.pos})\n{evi.desc}"
                     evi.pos = "all"
                     area.broadcast_evidence_list()
+                self.client.area.variables["presented_evidence_id"] = evidence - 1
+                self.client.area.variables["presented_evidence_name"] = evi.name
                 asyncio.get_running_loop().call_soon(
                     area.trigger_evidence, evi, "present", self.client
                 )
@@ -1179,9 +1192,11 @@ class AOProtocol(asyncio.Protocol):
         if self.client.used_showname_command:
             showname = self.client.showname
         self.client.showname = showname
-        if self.client.showname != old_showname:
-            self.server.player_state_observer.notify_character_name_changed(
-                self.client)
+
+        # we broadcast our state if our showname doesn't match
+        broadcast_state = broadcast_state or self.client.showname != old_showname
+        if broadcast_state:
+            self.server.player_state_observer.notify_changed(self.client)
 
         # Here, we check the pair stuff, and save info about it to the client.
         # Notably, while we only get a charid_pair and an offset, we send back a chair_pair, an emote, a talker offset
@@ -1771,7 +1786,7 @@ class AOProtocol(asyncio.Protocol):
 
         if self.client.name != args[0]:
             self.client.name = args[0]
-            self.server.player_state_observer.notify_name_changed(self.client)
+            self.server.player_state_observer.notify_changed(self.client)
         if args[1].lstrip() != args[1] and args[1].lstrip().startswith("/"):
             self.client.send_ooc(
                 "Your message was not sent for safety reasons: you left space before that slash."
@@ -2253,12 +2268,6 @@ class AOProtocol(asyncio.Protocol):
         if not self.validate_net_cmd(args, self.ArgType.INT, self.ArgType.STR, self.ArgType.STR, needs_auth=False):
             return
 
-        #  char_name
-        if args[1].lower() != self.client.char_name.lower():
-        #                       char_name
-            self.client.iniswap = args[1]
-        else:
-            self.client.iniswap = ""
         # Note: Updating the last_sprite could make things like updating the pair emote by just starting to type.
         # For example, this could be done by adding:
         #   self.client.last_sprite = args[2]
@@ -2299,11 +2308,6 @@ class AOProtocol(asyncio.Protocol):
             # If planned to add more authority levels, this "if" should be reconsidered.
             return
         
-        # char_name
-        if args[2].lower() != self.client.char_name.lower():
-            self.client.iniswap = args[2]
-        else:
-            self.client.iniswap = ""
         old_link = self.client.char_url
         # set the link
         self.client.char_url = args[3].strip()

@@ -10,7 +10,7 @@ from server import database
 from server.constants import TargetType
 from server.exceptions import ClientError, ServerError, ArgumentError
 from server.remote_client import RemoteClient
-from server.scripting import evaluate_expression, ScriptingError, DivisionByZeroError
+from server.scripting import evaluate_expression, resolve_value, ScriptingError, DivisionByZeroError
 
 from . import mod_only, command, Arg
 
@@ -40,30 +40,34 @@ __all__ = [
     "ooc_cmd_timer_interval",
     "ooc_cmd_ooc_actions",
     "ooc_cmd_sfx",
+    "ooc_cmd_get_variable",
+    "ooc_cmd_set_variable",
+    "ooc_cmd_evaluate_variable",
 ]
 
 
-def rtd(arg):
+def rtd(arg, default_vars={}):
     DICE_MAX = 11037
     NUMDICE_MAX = 20
-    MODIFIER_LENGTH_MAX = 12  # Change to a higher at your own risk
-    ACCEPTABLE_IN_MODIFIER = "1234567890+-*/().r"
+    MODIFIER_LENGTH_MAX = 64
     MAXDIVZERO_ATTEMPTS = 10
 
-    special_calculation = False
-    args = arg.split(" ")
-    arg_length = len(args)
-
-    if arg != "":
-        if arg_length == 2:
+    if arg == "":
+        num_dice, chosen_max, modifiers = 1, 6, ""
+    else:
+        args = arg.split(" ")
+        if len(args) == 2:
             dice_type, modifiers = args
-            if len(modifiers) > MODIFIER_LENGTH_MAX:
-                raise ArgumentError("The given modifier is too long to compute. Please try a shorter one")
-        elif arg_length == 1:
-            dice_type, modifiers = arg, ""
+        elif len(args) == 1:
+            dice_type, modifiers = args[0], ""
         else:
             raise ArgumentError(
-                "This command takes one or two arguments. Use /roll [<num of rolls>]d[<max>] [modifiers]"
+                "This command takes one or two arguments. "
+                "Use /roll [<num of rolls>]d[<max>] [modifiers]"
+            )
+        if len(modifiers) > MODIFIER_LENGTH_MAX:
+            raise ArgumentError(
+                "The given modifier is too long to compute. Please try a shorter one"
             )
 
         dice_type = dice_type.split("d")
@@ -75,72 +79,75 @@ def rtd(arg):
         try:
             num_dice, chosen_max = int(dice_type[0]), int(dice_type[1])
         except ValueError:
-            raise ArgumentError("Expected integer value for number of rolls and max value of dice")
+            raise ArgumentError(
+                "Expected integer value for number of rolls and max value of dice"
+            )
 
         if not 1 <= num_dice <= NUMDICE_MAX:
-            raise ArgumentError("Number of rolls must be between 1 and {}".format(NUMDICE_MAX))
+            raise ArgumentError(
+                "Number of rolls must be between 1 and {}".format(NUMDICE_MAX)
+            )
         if not 1 <= chosen_max <= DICE_MAX:
-            raise ArgumentError("Dice value must be between 1 and {}".format(DICE_MAX))
+            raise ArgumentError(
+                "Dice value must be between 1 and {}".format(DICE_MAX)
+            )
 
-        for char in modifiers:
-            if char not in ACCEPTABLE_IN_MODIFIER:
-                raise ArgumentError("Expected numbers and standard mathematical operations in modifier")
-            if char == "r":
-                special_calculation = True
-        if "**" in modifiers:  # Exponentiation manually disabled, it can be pretty dangerous
-            raise ArgumentError("Expected numbers and standard mathematical operations in modifier")
-    else:
-        num_dice, chosen_max, modifiers = 1, 6, ""  # Default
+    special = "r" in modifiers  # 'r' is the roll variable
 
-    roll = ""
-    Sum = 0
+    parts = []
+    total = 0
 
-    for i in range(num_dice):
-        divzero_attempts = 0
-        while True:
-            raw_roll = str(random.randint(1, chosen_max))
+    for _ in range(num_dice):
+        for _attempt in range(MAXDIVZERO_ATTEMPTS):
+            raw_roll = random.randint(1, chosen_max)
+
             if modifiers == "":
-                aux_modifier = ""
-                mid_roll = int(raw_roll)
+                mid_roll = raw_roll
+                display = str(raw_roll)
+                break
+
+            if special:
+                # 'r' is a variable in the evaluator; the user writes the
+                # whole formula themselves.
+                expr = modifiers
+                display = modifiers.replace("r", str(raw_roll)) + "="
+            elif modifiers[0].isdigit():
+                expr = f"{raw_roll}+{modifiers}"
+                display = expr + "="
             else:
-                if special_calculation:
-                    aux_modifier = modifiers.replace("r", raw_roll) + "="
-                elif modifiers[0].isdigit():
-                    aux_modifier = raw_roll + "+" + modifiers + "="
-                else:
-                    aux_modifier = raw_roll + modifiers + "="
+                expr = f"{raw_roll}{modifiers}"
+                display = expr + "="
 
-                try:
-                    mid_roll = round(
-                        evaluate_expression(aux_modifier[:-1])
-                    )  # Shared, whitelisted evaluator from server/scripting
-                except DivisionByZeroError:
-                    divzero_attempts += 1
-                    if divzero_attempts == MAXDIVZERO_ATTEMPTS:
-                        raise ArgumentError(
-                            "Given mathematical formula produces divisions by zero too often and cannot be computed"
-                        )
-                    continue
-                except ScriptingError:
-                    raise ArgumentError("Given mathematical formula has a syntax error and cannot be computed")
+            variables = dict(default_vars)
+            if special:
+                variables["r"] = raw_roll
+
+            try:
+                mid_roll = round(evaluate_expression(expr, variables))
+            except DivisionByZeroError:
+                continue
+            except ScriptingError as e:
+                raise ArgumentError(
+                    f"Given mathematical formula has a syntax error and cannot be computed: {e}"
+                )
             break
-
-        final_roll = mid_roll  # min(chosen_max,max(1,mid_roll))
-        Sum += final_roll
-        if final_roll != mid_roll:
-            final_roll = "|" + str(
-                final_roll
-            )  # This visually indicates the roll was capped off due to exceeding the acceptable roll range
         else:
-            final_roll = str(final_roll)
+            raise ArgumentError(
+                "Given mathematical formula produces divisions by zero too often "
+                "and cannot be computed"
+            )
+
+        total += mid_roll
         if modifiers != "":
-            roll += str(raw_roll + ":")
-        roll += str(aux_modifier + final_roll) + ", "
-    roll = roll[:-2]
+            parts.append(f"{raw_roll}:{display}{mid_roll}")
+        else:
+            parts.append(str(mid_roll))
+
+    roll = ", ".join(parts)
     if num_dice > 1:
         roll = "(" + roll + ")"
 
-    return roll, num_dice, chosen_max, modifiers, Sum
+    return roll, num_dice, chosen_max, modifiers, total
 
 
 @command(Arg("arg", rest=True, default="", help="[value/XdY] [modifier]"))
@@ -152,8 +159,8 @@ def ooc_cmd_roll(client, arg):
     X is the number of dice, Y is the maximum value on the die.
     Usage: /rollp [value/XdY] ["+5"/"-5"/"*5"/"/5"]
     """
-    roll, num_dice, chosen_max, _modifiers, Sum = rtd(arg)
-
+    roll, num_dice, chosen_max, _modifiers, Sum = rtd(arg, client.area.variables)
+    client.area.variables["roll_sum"] = Sum
     client.area.broadcast_ooc(
         f"[👉🎲] [{client.id}] {client.showname} rolled:\n {roll} out of {chosen_max}."
         + (f"\nThe total sum is {Sum}." if num_dice > 1 else "")
@@ -170,8 +177,8 @@ def ooc_cmd_rollp(client, arg):
     X is the number of dice, Y is the maximum value on the die.
     Usage: /rollp [value/XdY] ["+5"/"-5"/"*5"/"/5"]
     """
-    roll, num_dice, chosen_max, _modifiers, Sum = rtd(arg)
-
+    roll, num_dice, chosen_max, _modifiers, Sum = rtd(arg, client.area.variables)
+    client.area.variables["hidden_roll_sum"] = Sum
     client.send_ooc(
         f"[Hidden] You rolled {roll} out of {chosen_max}." + (f"\nThe total sum is {Sum}." if num_dice > 1 else "")
     )
@@ -1069,3 +1076,54 @@ def ooc_cmd_sfx(client, arg):
             a.broadcast_ooc(f"[{client.id}] {client.showname} has played sfx '{arg}'.")
     client.set_sfx_delay()
     database.log_area("sfx", client, client.area, message=f"has played sfx {arg}")
+
+
+@command(Arg("var", rest=True, default="", help="variable currently stored in the area."))
+def ooc_cmd_get_variable(client, var):
+    """
+    Get the value of the variable by name in the current area.
+    If <var> is blank you'll be shown all variables that are set in current area.
+    Usage: /get_variable <var>
+    """
+    if var == "":
+        text = "Current variables in area:\n"
+        for key, value in client.area.variables.items():
+            text += f"\nVariable: {key}, Value: {value}"
+        client.send_ooc(text)
+        return
+    if var in client.area.variables:
+        client.send_ooc(f"Variable {var} is set to {client.area.variables[var]}.")
+    else:
+        raise ClientError(f"Variable {var} is not set!")
+
+
+@command(
+    Arg("var", default="", help="variable name"),
+    Arg("value", rest=True, default="", help="value to set it to")
+)
+def ooc_cmd_set_variable(client, var, value):
+    """
+    Set the current area's variable <var> to value <value>.
+    <expr> can either be a value, like 10, or an expression, like 10+10, x+5, etc.
+    Usage: /set_variable <var> <value>
+    """
+    if var == "":
+        raise ClientError("Variable can't be empty!")
+    client.area.variables[var] = value
+    client.send_ooc(f"Successfully set Variable: {var} to Value: {value}")
+
+
+@command(
+    Arg("var", default="", help="variable name"),
+    Arg("expr", rest=True, default="", help="value to set it to, or an expression (10+10, x+5, etc.)")
+)
+def ooc_cmd_evaluate_variable(client, var, expr):
+    """
+    Evaluate the current area's variable <var> using the <expr> expression.
+    <expr> can either be a value, like 10, or an expression, like 10+10, x+5, etc.
+    Usage: /evaluate_variable <var> <expr>
+    """
+    variables = getattr(client.area, "variables", {})
+    value = resolve_value(expr, variables)
+    client.area.variables[var] = value
+    client.send_ooc(f"Successfully set Variable: {var} to Value: {value}")

@@ -463,7 +463,7 @@ class AreaManager:
             f"[{client.id}] {client.showname} ({client.name}) is GM in this hub now."
         )
         client.hide(True)
-
+        self.server.player_state_observer.notify_changed(client)
         bridge = getattr(self.server, "gm_panel_bridge", None)
         if bridge is not None:
             bridge.on_hub_gm_roster_changed(self)
@@ -481,6 +481,11 @@ class AreaManager:
         Remove a GM from the Hub.
         """
         self.owners.remove(client)
+
+        # remote clients should not affect anything else when removed
+        if isinstance(client, RemoteClient):
+            return
+
         if len(client.broadcast_list) > 0:
             client.broadcast_list.clear()
             client.send_ooc("Your broadcast list has been cleared.")
@@ -498,7 +503,7 @@ class AreaManager:
             f"[{client.id}] {client.showname} ({client.name}) is no longer GM in this hub."
         )
         client.hide(False)
-
+        self.server.player_state_observer.notify_changed(client)
         bridge = getattr(self.server, "gm_panel_bridge", None)
         if bridge is not None:
             bridge.on_hub_gm_roster_changed(self)

@@ -180,6 +180,9 @@ class ClientManager:
 
             # a list of all areas the client can currently see
             self.local_area_list = []
+            # player IDs this client has already been sent via PR ADD. PR ADD
+            # appends on the client, so this prevents duplicate entries.
+            self.player_list_ids = set()
             # a list of all songs the client can currently see
             self.local_music_list = []
             # reference to the storage/musiclists/ref.yaml for displaying purposes
@@ -237,6 +240,8 @@ class ClientManager:
             # RemoteClient overrides the CT/MS interception path; see base
             # `_notify_monitors`. Kept on for real clients only.
             self._monitors_self_intercept = True
+
+            self.is_remote_client = False
 
         def send_raw_message(self, msg):
             """
@@ -795,7 +800,7 @@ class ClientManager:
             #                        *self.get_available_char_list())
             if arup:
                 self.area.area_manager.send_arup_players()
-            self.server.player_state_observer.notify_character_changed(self)
+            self.server.player_state_observer.notify_changed(self)
             new_char = self.char_name
             database.log_area(
                 "char.change",
@@ -824,6 +829,9 @@ class ClientManager:
                 self.first_joined = False
                 self.area.broadcast_ooc(
                     f"[{self.id}] {self.showname} has joined!")
+                # Show the area's welcome popup (BB packet) if one is set.
+                if self.area.popup:
+                    self.send_bb(self.area.popup)
 
             if self.area.area_manager.autokick_to_latest_area:
                 self.kick_to_latest_area()
@@ -1350,15 +1358,16 @@ class ClientManager:
                     raise ClientError("The automation executor cannot leave its area.")
                 if old_area.area_manager != area.area_manager:
                     raise ClientError("The automation executor cannot change hubs.")
-            # If this person switched hubs
-            if old_area.area_manager != area.area_manager:
-                # Make sure a single person can't hoard all the hubs
-                if self in old_area.area_manager.owners:
-                    old_area.area_manager.remove_owner(self)
-                # Don't allow multi-hub CMing either
-                for a in old_area.area_manager.areas:
-                    if self in a.owners:
-                        a.remove_owner(self)
+            else:
+                # If this person switched hubs
+                if old_area.area_manager != area.area_manager:
+                    # Make sure a single person can't hoard all the hubs
+                    if self in old_area.area_manager.owners:
+                        old_area.area_manager.remove_owner(self)
+                    # Don't allow multi-hub CMing either
+                    for a in old_area.area_manager.areas:
+                        if self in a.owners:
+                            a.remove_owner(self)
             if self in old_area.clients:
                 old_area.remove_client(self)
             self.area = area
@@ -1393,11 +1402,8 @@ class ClientManager:
 
             self.area.area_manager.send_arup_players()
 
-            if old_area.area_manager != self.area.area_manager:
-                self.server.player_state_observer.notify_hub_changed(
-                    self, old_area.area_manager)
-            else:
-                self.server.player_state_observer.notify_area_id_changed(self)
+            self.server.player_state_observer.notify_changed(
+                self, old_area.area_manager)
 
             bridge = getattr(self.server, "gm_panel_bridge", None)
             if bridge is not None:
@@ -1985,7 +1991,8 @@ class ClientManager:
             if not self.is_mod:
                 player_list = [c for c in player_list if c.ipid != _SYSTEM_IPID]
 
-            if not self.is_mod and self not in area.owners:
+            gm_allowed = self.is_mod or self in area.owners
+            if not gm_allowed:
                 if not area.can_getarea:
                     raise ClientError("Unknown clients - can't /getarea.")
                 if area.dark:
@@ -2032,6 +2039,8 @@ class ClientManager:
                     if c.hidden_in is not None:
                         name = f":{c.area.evi_list.evidences[c.hidden_in].name}"
                     info += f"📦{name}"
+                elif (c==self or gm_allowed) and c.sneaking:
+                    info += f"🥷"
                 if c.is_mod:
                     info += "[M]"
                 elif c in area.area_manager.owners:
@@ -2049,6 +2058,8 @@ class ClientManager:
                     info += f" ({c.ipid})"
                 if c.name != "" and (self.is_mod or self in area.owners):
                     info += f": {c.name}"
+                if self.following == c:
+                    info += " 👣"
                 if show_links and c.char_url != "":
                     info += f" < {c.char_url} >"
             return info
@@ -2427,6 +2438,7 @@ class ClientManager:
             """Set the character's description character data."""
             self.area.area_manager.set_character_data(
                 self.char_id, "desc", value)
+            self.server.player_state_observer.notify_changed(self)
 
         @property
         def hidden(self):
@@ -2519,7 +2531,7 @@ class ClientManager:
             self._hidden = tog
             self.send_ooc(f"You are {msg} from /getarea and playercounts.")
             self.area.area_manager.send_arup_players()
-            self.server.player_state_observer.notify_visibility_changed(self)
+            self.server.player_state_observer.notify_changed(self)
             if not self.sneaking:
                 self.area.broadcast_player_list()
 
@@ -2557,24 +2569,28 @@ class ClientManager:
                 self.area.broadcast_player_list()
             else:
                 self.area.broadcast_player_list_to_target(self)
+            self.server.player_state_observer.notify_changed(self)
 
         def deafen(self, tog=True):
             """Deafen the client: IC messages arrive as blankposts (dots)."""
             self.deafened = tog
             msg = "no longer" if not tog else "now"
             self.send_ooc(f"You are {msg} deafened: IC messages are muffled.")
+            self.server.player_state_observer.notify_changed(self)
 
         def player_mute(self, tog=True):
             """Mute the client from sending IC messages (does not affect OOC)."""
             self.player_muted = tog
             msg = "no longer" if not tog else "now"
             self.send_ooc(f"You are {msg} player-muted from sending IC messages.")
+            self.server.player_state_observer.notify_changed(self)
 
         def force_blankpost(self, tog=True):
             """Force the client to only be able to send blankposts."""
             self.forced_blankpost = tog
             msg = "no longer" if not tog else "now"
             self.send_ooc(f"You are {msg} forced to only blankpost in IC.")
+            self.server.player_state_observer.notify_changed(self)
 
         def deafen_message(self, msg, ao_packet=True):
             """Muffle a message: legible characters become dots, while
@@ -2619,6 +2635,7 @@ class ClientManager:
             self.send_ooc(
                 f"You are {msg} frozen from moving between areas."
             )
+            self.server.player_state_observer.notify_changed(self)
 
         def sneak(self, tog=True):
             self.sneaking = tog
@@ -2628,13 +2645,16 @@ class ClientManager:
             self.send_ooc(
                 f"You are {msg} sneaking (area transfer announcements will {msg} be hidden)."
             )
+            self.server.player_state_observer.notify_changed(self)
 
         def follow(self, target):
             try:
-                self.change_area(target.area)
+                if self.area != target.area:
+                    self.change_area(target.area)
                 self.following = target
                 self.send_ooc(
                     f"You are now following [{target.id}] {target.showname}.")
+                self.server.player_state_observer.notify_changed(self)
             except ValueError:
                 raise
             except (AreaError, ClientError):
@@ -2642,14 +2662,13 @@ class ClientManager:
 
         def unfollow(self, silent=False):
             if self.following is not None:
-                try:
-                    if not silent:
-                        self.send_ooc(
-                            f"You are no longer following [{self.following.id}] {self.following.showname}."
-                        )
-                    self.following = None
-                except Exception:
-                    self.following = None
+                if not silent:
+                    self.send_ooc(
+                        f"You are no longer following [{self.following.id}] {self.following.showname}."
+                    )
+                following = self.following
+                self.following = None
+                self.server.player_state_observer.notify_changed(self)
 
         def change_position(self, pos=""):
             """
@@ -2669,6 +2688,7 @@ class ClientManager:
             self.send_command("SP", self.pos)
             # Send evidence list
             self.update_evidence_list()
+            self.server.player_state_observer.notify_changed(self)
 
         def set_mod_call_delay(self):
             """Begin the mod call cooldown."""
@@ -2856,6 +2876,15 @@ class ClientManager:
                 # as that ID will no longer refer to this specific player.
                 if client.id in a.invite_list:
                     a.invite_list.discard(client.id)
+
+        if client.is_remote_client:
+            client.leave_area()
+            for c in self.server.client_manager.clients:
+                if c.following == client:
+                    c.unfollow()
+            self.clients.remove(client)
+            return
+
         heappush(self.cur_id, client.id)
         temp_ipid = client.ipid
         for c in self.server.client_manager.clients:
@@ -2973,6 +3002,7 @@ class ClientManager:
             client.area.afkers.append(client)
         if not client.hidden and not client.sneaking:
             client.area.broadcast_player_list()
+        self.server.player_state_observer.notify_changed(client)
 
     def refresh_music(self, clients=None, reload=False):
         """

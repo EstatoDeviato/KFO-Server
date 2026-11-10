@@ -361,10 +361,10 @@ def ooc_cmd_kill(client, target, corpse):
         )
     try:
         for target in targets:
-            print(corpse)
+            kill_msg = f"You killed [{target.id}] {target.showname}"
             if corpse:
                 # Grab their showname without the folder path if char folder is used
-                name = f"Corpse of {target.showname.rsplit("/", 1)[-1]}"
+                name = f"Corpse of {target.showname.rsplit('/', 1)[-1]}"
                 desc = "They're dead...!"
                 image = "aai/blood.png"
                 char_folder = target.f_char_name_raw
@@ -374,11 +374,15 @@ def ooc_cmd_kill(client, target, corpse):
                 if pos == "":
                     pos = "all"
                 target.area.evi_list.add_evidence(
-                    client, name, desc, image, target.pos
+                    client, name, desc, image, pos
                 )
                 target.area.broadcast_evidence_list()
+                kill_msg += " leaving behind a corpse!"
+            else:
+                kill_msg += " without a trace left behind..."
             force_switch(client, target, "-1")
-            target.send_ooc(f"💀You are dead!💀")
+            target.send_ooc("💀You are dead!💀")
+            client.send_ooc(kill_msg)
     except Exception as ex:
         raise ArgumentError(
             f"Error encountered: {ex}. Use /kill <id(s)> as a mod or area owner."
@@ -1258,14 +1262,18 @@ def ooc_cmd_chardesc(client, arg):
             ooc_cmd_chardesc_clear(client)
             return
         client.desc = arg
+        desc = arg[:128]
+        if len(arg) > len(desc):
+            desc += f"... Use /chardesc {client.id} to read the rest."
         if not client.hidden and not client.sneaking:
-            desc = arg[:128]
-            if len(arg) > len(desc):
-                desc += f"... Use /chardesc {client.id} to read the rest."
             client.area.broadcast_ooc(
                 f"{client.showname} changed their character description to: {desc}."
             )
             client.area.broadcast_player_list()
+        else:
+            client.send_ooc(
+                f"You stealthily changed your character description to: {desc}."
+            )
         database.log_area("chardesc.change", client, client.area, message=arg)
 
 
@@ -1429,8 +1437,7 @@ def ooc_cmd_showname(client, arg):
         client.used_showname_command = False
         client.showname = ""
         client.send_ooc("Your showname is now reset.")
-        client.server.player_state_observer.notify_character_name_changed(
-            client)
+        client.server.player_state_observer.notify_changed(client)
         return
     # having to copy-paste code from aoprotocol is kinda poopy, need to create a set_showname def
     if len(arg) > 20:
@@ -1443,7 +1450,7 @@ def ooc_cmd_showname(client, arg):
     client.used_showname_command = True
     client.showname = arg
     client.send_ooc(f"You set your showname to '{client.showname}'.")
-    client.server.player_state_observer.notify_character_name_changed(client)
+    client.server.player_state_observer.notify_changed(client)
     if not client.hidden and not client.sneaking:
         client.area.broadcast_player_list()
 
